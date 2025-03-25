@@ -106,6 +106,7 @@ while (kv <= nv) && (el2 >= eps)
 end
 
 uf = um{1}.u;
+figure;
 surf(uf);
 
 final_error = el2;

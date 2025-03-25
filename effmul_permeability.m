@@ -1,4 +1,4 @@
-clear all;
+clear all;clc;close;
 %**************************************************************************
 %
 %     Implementation of the network model to compute the effective properties 
@@ -29,11 +29,24 @@ clear all;
 %
 %*************************************************************************
 
-      nx = input('enter nx (must be a power of 2):');
-      pdrop = input('enter pressure drop:');
-      vf0 = input('enter the desired volumn fraction:');
-      rsig = input('enter the std of the log-normal dist:');
+      %nx = input('enter nx (must be a power of 2):');
+      %pdrop = input('enter pressure drop:');
+      %vf0 = input('enter the desired volumn fraction:');
+      %rsig = input('enter the std of the log-normal dist:');
+      nx = 256;
       ny = nx;
+      pdrop = 1.d0;
+      vf0 = .05;
+      rsig = .5;
+      trials = 5;
+
+n=250;
+domain = [0 n];
+a = 8; %infow of nutrients
+b = .1; %outflow of nutrients
+c = .8; %Nutrient uptake by algae 
+c_p = 1.3; %algal growth rate
+d = .5; %EPS growth rate due to algae 
 
 %     *******************************
 %     The following is a reference sample for all parameters:      
@@ -64,25 +77,70 @@ clear all;
       fprintf('std of cross section areas is %8.5f\n',sqrt(amu));
 
 %     draw a sample of bond coefficients:
-      sv = exp(rmu+rsig*randn(nx+1,ny+1));
-      sh = exp(rmu+rsig*randn(nx+1,ny+1));
 %    *************************************
-
+    for i=1:trials
+        if i ==1
+        sv = exp(rmu+rsig*randn(nx+1,ny+1));
+        sh = exp(rmu+rsig*randn(nx+1,ny+1));
+        
 %     multigrid algorithm to solve the elliptic system:
+        else
+            if i==2 
+                IC_N = 25;
+                IC_A = 25;
+                IC_E = 0;
+                IC = [IC_N IC_A IC_E];
+            else
+                IC_N = N_sol(end) ;
+                IC_A = A_sol(end) ;
+                IC_E = E_sol(end);
+                E_plot(i) = E_sol(end);
+                IC = [IC_N IC_A IC_E];
+            end
+            [IV_sol,DVsol] = ode23(@(t, y) NAE(t, y, effcoe, a,b,c,c_p,d), domain, IC);
+                N_sol = DVsol(:, 1);
+                A_sol = DVsol(:, 2);
+                E_sol = DVsol(:, 3);
+                volume_total = (sum(sv(:)) + sum(sh(:)))*h; %calc total volume
+                mass_EPS_total = volume_total * (E_sol(end)); %calc total mass of eps
+                d_v = sv / sum(sv(:));  % Distribution factor for each pipe (proportional) vertical
+                d_h = sh / sum(sh(:));  % Distribution factor for each pipe (proportional) horizontal
+                volume_EPS_v = (d_v .* mass_EPS_total);  % Volume = mass / density
+                volume_EPS_h = (d_h .* mass_EPS_total);  % Volume = mass / density
+                sv = max(0, sv - volume_EPS_v);  % Update vertical pipes (sv)
+                sh = max(0, sh - volume_EPS_h);  % Update horizontal pipes (sh)
 
-     [phi, final_error] = kikmul(pdrop,sv,sh,nx,ny);
+                figure;
+                subplot(1,2,1);
+                histogram(log(sv(:)));
+                xlabel('ln(A) of Vertical Pipes');
+                ylabel('Frequency');
+                title('Histogram of ln(sv)');
+                
+                subplot(1,2,2);
+                histogram(log(sh(:)));
+                xlabel('ln(A) of Horizontal Pipes');
+                ylabel('Frequency');
+                title('Histogram of ln(sh)');
+
+sgtitle('Distribution of ln(A) for Pipe Cross-Sections After EPS Accumulation');
+                
+        end
+     fin = zeros(nx+1, ny+1);
+     [phi, final_error] = kikmul(fin,pdrop,sv,sh,nx,ny);
 
 %     compute the effective coefficients based on the solution:
 
       effleft = sum((pdrop-phi(nx,:)).*sh(nx,:))/pdrop/h^2;
       effright = sum(phi(2,:).*sh(1,:))/pdrop/h^2;
       effcoe = 0.5*(effleft+effright);
-
+      eff_plot(i) = effcoe;
 
 %     Output:
 
       fprintf('effcoe = %8.6f\n',effcoe);
       fprintf('rmu and rsig: %12.6f %12.6f\n',rmu,rsig);
 
-
-
+    end
+    figure;
+plot(E_plot,eff_plot)
