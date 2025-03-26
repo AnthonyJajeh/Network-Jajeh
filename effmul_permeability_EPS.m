@@ -32,10 +32,10 @@ clear all; clc; close all;
 nx = 256; %size of grid nxn power of 2
 ny = nx;
 pdrop = 1.d0; %pressure drop
-vf0 = .05; %targeted volume fraction
+vf0 = .25; %targeted volume fraction
 rsig = .5; %mean of lognormal distribution
-trials = 10; %number  of trials
-n = 25;
+trials = 5; %number  of trials
+n = 10;
 
 eff_mean_plot = zeros(1, n); %allocated spot for effective permeability
 eff_trial_all=zeros(n,trials);
@@ -103,6 +103,10 @@ parfor i = 1:n
     % Debugging output
     fprintf('Trial %d, EPS concentration = %8.2f, effcoe = %8.6f\n', t, EPS_concentration, effcoe);
     end
+       if i == n-5
+            sv_final = sv;
+            sh_final = sh;
+       end
     %store all trial results
     eff_trial_all(i,:)=eff_trial;
     % compute thee maen permaebility across all trials for specific EPS
@@ -117,18 +121,35 @@ end
 % Plot EPS concentration vs Effective Permeability for all trials
 figure;
 hold on;
+
+% Plot the individual trial data points
 for i = 1:n
     plot(repmat(EPS_con(i), 1, trials), eff_trial_all(i, :), 'bo'); % Trial data points
 end
+% Calculate the standard deviation for each EPS concentration
+eff_std = std(eff_trial_all, 0, 2); % Standard deviation along the second dimension (across trials)
+
+% Plot the mean effective permeability with error bars
+errorbar(EPS_con, eff_mean_plot, eff_std, 'r-', 'LineWidth', 2, 'MarkerSize', 8); % Mean with error bars
+
 xlabel('EPS concentration');
 ylabel('Effective Permeability');
 title('Effect of EPS on Permeability for Multiple Trials');
 grid on;
 hold off;
-
+ 
 figure;
-plot(EPS_con, eff_mean_plot, 'r-', 'LineWidth', 2); % Mean effective permeability
-xlabel('EPS concentration');
-ylabel('Mean Effective Permeability');
-title('Mean Effect of EPS on Permeability');
-grid on;
+subplot(1,2,1);
+histogram(log(sv_final(:)));
+xlabel('ln(A) of Vertical Pipes');
+ylabel('Frequency');
+title('Histogram of ln(sv)');
+
+subplot(1,2,2);
+histogram(log(sh_final(:)));
+xlabel('ln(A) of Horizontal Pipes');
+ylabel('Frequency');
+title('Histogram of ln(sh)');
+
+sgtitle('Distribution of ln(A) for Pipe Cross-Sections After EPS Accumulation');
+
