@@ -34,11 +34,13 @@ ny = nx;
 pdrop = 1.d0; %pressure drop
 vf0 = .05; %targeted volume fraction
 rsig = .5; %mean of lognormal distribution
-trials = 2; %number  of trials
-
+trials = 10; %number  of trials
 n = 25;
+
+eff_mean_plot = zeros(1, n); %allocated spot for effective permeability
+eff_trial_all=zeros(n,trials);
 EPS_con = linspace(0, 50, n); % EPS concentration values
-eff_plot = zeros(1, n); %allocated spot for effective permaebility
+eff_mean = zeros(1, n); %allocated spot for effective permaebility
 domain = [0 n];
 
      %The following is to specify the distribution parameters for the
@@ -61,15 +63,18 @@ domain = [0 n];
 
 mass_EPS_total = zeros(1, n); %total mass of eps allocation
 volume_total = zeros(1, n); %total volume allocation
-rho_EPS = 1000;
+rho_EPS = 1500;
 
-for i = 1:n
+parfor i = 1:n
+    eff_trial = zeros(1,trials);
+    EPS_concentration = EPS_con(i)
+    for t = 1:trials
         % Initialize cross-sectional areas for the first iteration
         sv = exp(rmu + rsig * randn(nx + 1, ny + 1));
         sh = exp(rmu + rsig * randn(nx + 1, ny + 1));
         % Update volume and mass for each EPS concentration
         volume_total(i) = (sum(sv(:)) + sum(sh(:))) * h;  % Total volume of pipes
-        mass_EPS_total(i) = volume_total(i) * EPS_con(i);  % Total mass of EPS
+        mass_EPS_total(i) = volume_total(i) * EPS_concentration;  % Total mass of EPS
         
         % Distribution factor for each pipe (proportional)
         d_v = sv / sum(sv(:));  % Vertical distribution
@@ -94,17 +99,36 @@ for i = 1:n
     effleft = sum((pdrop - phi(nx, :)) .* sh(nx, :)) / pdrop / h^2;
     effright = sum(phi(2, :) .* sh(1, :)) / pdrop / h^2;
     effcoe = 0.5 * (effleft + effright);
-    eff_plot(i) = effcoe;
-    
+    eff_trial(t) = effcoe;
+    % Debugging output
+    fprintf('Trial %d, EPS concentration = %8.2f, effcoe = %8.6f\n', t, EPS_concentration, effcoe);
+    end
+    %store all trial results
+    eff_trial_all(i,:)=eff_trial;
+    % compute thee maen permaebility across all trials for specific EPS
+    % concentriation
+    eff_mean_plot(i) = mean(eff_trial);
     % Debugging output
       fprintf('effcoe = %8.6f\n',effcoe);
       fprintf('rmu and rsig: %12.6f %12.6f\n',rmu,rsig);
 end
 
 % Plot permeability vs EPS concentration
+% Plot EPS concentration vs Effective Permeability for all trials
 figure;
-plot(EPS_con, eff_plot, 'LineWidth', 2);
+hold on;
+for i = 1:n
+    plot(repmat(EPS_con(i), 1, trials), eff_trial_all(i, :), 'bo'); % Trial data points
+end
 xlabel('EPS concentration');
-ylabel('Permeability');
-title('Effect of EPS on Permeability');
+ylabel('Effective Permeability');
+title('Effect of EPS on Permeability for Multiple Trials');
+grid on;
+hold off;
+
+figure;
+plot(EPS_con, eff_mean_plot, 'r-', 'LineWidth', 2); % Mean effective permeability
+xlabel('EPS concentration');
+ylabel('Mean Effective Permeability');
+title('Mean Effect of EPS on Permeability');
 grid on;
