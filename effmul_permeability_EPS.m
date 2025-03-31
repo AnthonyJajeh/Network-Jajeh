@@ -35,13 +35,17 @@ pdrop = 1.d0; %pressure drop
 vf0 = .25; %targeted volume fraction
 rsig = .5; %mean of lognormal distribution
 trials = 5; %number  of trials
-n = 10;
+n = 50;
 
 eff_mean_plot = zeros(1, n); %allocated spot for effective permeability
 eff_trial_all=zeros(n,trials);
-EPS_con = linspace(0, 50, n); % EPS concentration values
+EPS_con = linspace(0, 100, n); % EPS concentration values
 eff_mean = zeros(1, n); %allocated spot for effective permaebility
 domain = [0 n];
+
+sv_all = cell(n, trials);
+sh_all = cell(n, trials);
+
 
      %The following is to specify the distribution parameters for the
 %     connecting tube bond coefficients, and generate samples according 
@@ -90,6 +94,9 @@ parfor i = 1:n
         % Update cross-sectional areas after EPS accumulation
         sv = max(0, sv - volume_EPS_v / h);  % Update vertical pipes (sv)
         sh = max(0, sh - volume_EPS_h / h);  % Update horizontal pipes (sh)
+          sv_all{i, t} = sv;
+          sh_all{i, t} = sh;
+        
 
     % Solve the permeability problem using the multigrid method (kikmul)
     fin = zeros(nx + 1, ny + 1);
@@ -103,10 +110,6 @@ parfor i = 1:n
     % Debugging output
     fprintf('Trial %d, EPS concentration = %8.2f, effcoe = %8.6f\n', t, EPS_concentration, effcoe);
     end
-       if i == n-5
-            sv_final = sv;
-            sh_final = sh;
-       end
     %store all trial results
     eff_trial_all(i,:)=eff_trial;
     % compute thee maen permaebility across all trials for specific EPS
@@ -116,6 +119,11 @@ parfor i = 1:n
       fprintf('effcoe = %8.6f\n',effcoe);
       fprintf('rmu and rsig: %12.6f %12.6f\n',rmu,rsig);
 end
+random_i = randi(n);
+random_t = randi(trials);
+sv_final = sv_all{random_i, random_t};
+sh_final = sh_all{random_i, random_t};
+
 
 % Plot permeability vs EPS concentration
 % Plot EPS concentration vs Effective Permeability for all trials
@@ -140,16 +148,15 @@ hold off;
  
 figure;
 subplot(1,2,1);
-histogram(log(sv_final(:)));
+histogram(log(sv_final(:)), 50, 'FaceColor', 'b');
 xlabel('ln(A) of Vertical Pipes');
 ylabel('Frequency');
 title('Histogram of ln(sv)');
 
 subplot(1,2,2);
-histogram(log(sh_final(:)));
+histogram(log(sh_final(:)), 50, 'FaceColor', 'r');
 xlabel('ln(A) of Horizontal Pipes');
 ylabel('Frequency');
 title('Histogram of ln(sh)');
 
 sgtitle('Distribution of ln(A) for Pipe Cross-Sections After EPS Accumulation');
-
