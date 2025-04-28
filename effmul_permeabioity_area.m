@@ -32,21 +32,27 @@ clear all; clc; close all;
 nx = 256; %size of grid nxn power of 2
 ny = nx;
 pdrop = 1.d0; %pressure drop
-vf0 = .05; %targeted volume fraction
-rsig = .25; %mean of lognormal distribution
+vf0 = .1; %targeted volume fraction
+rsig = .5; %mean of lognormal distribution
 %rmu = 1;
 %h=.9;
 trials = 5; %number  of trials
 n = 10;
 
-eff_mean_plot = zeros(1, n); %allocated spot for effective permeability
-eff_trial_all=zeros(n,trials);
-EPS_con = linspace(0, 750, n); % EPS concentration values
+eff_mean_perm_plot = zeros(1, n); %allocated spot for effective permeability
+eff_trial_all_perm=zeros(n,trials);
+EPS_con = linspace(0, 100, n); % EPS concentration values
 eff_mean = zeros(1, n); %allocated spot for effective permaebility
+
+mean_area_trials = zeros(1,n); %allocate spot for effective mean
+mean_area_all = zeros(n,trials);
+mean_area_plot = zeros(1,n);
+
 domain = [0 n];
 
 sv_all = cell(n, trials);
 sh_all = cell(n, trials);
+
 
 %MODEL 1 
    %  The following is to specify the distribution parameters for the
@@ -62,10 +68,10 @@ sh_all = cell(n, trials);
     %sectional radius:
      %rmu = log(am0) - 0.5*rsig^2;
    % which is the mean of log area and
-     amu = exp(2.0*rmu)*(exp(2.0*rsig^2)-exp(rsig^2));
+     %amu = exp(2.0*rmu)*(exp(2.0*rsig^2)-exp(rsig^2));
    % which is the variance of the cross section areas, and cell size
-     h = sqrt(2*am0/vf0);
-     fprintf('std of cross section areas is %8.5f\n',sqrt(amu));
+     %h = sqrt(2*am0/vf0);
+     %fprintf('std of cross section areas is %8.5f\n',sqrt(amu));
 
 %MODEEL 2 
 % h = .9;
@@ -75,12 +81,17 @@ sh_all = cell(n, trials);
 
 mass_EPS_total = zeros(1, n); %total mass of eps allocation
 volume_total = zeros(1, n); %total volume allocation
+
 rho_EPS = 1500;
 
 parfor i = 1:n
     eff_trial = zeros(1,trials);
+    mean_area_single_trial = zeros(1, trials); % allocate storage for mean areas at each trial
     EPS_concentration = EPS_con(i)
     for t = 1:trials
+        am0_EPS = pi*(7.d-2 + 1.6d-1*vf0)^2 * (1-(EPS_concentration/rho_EPS))
+        rmu = log(am0_EPS)-.5*rsig^2;
+        h = sqrt((2*am0_EPS)/vf0);
         % Initialize cross-sectional areas for the first iteration
         sv = exp(rmu + rsig * randn(nx + 1, ny + 1));
         sh = exp(rmu + rsig * randn(nx + 1, ny + 1));
@@ -115,17 +126,28 @@ parfor i = 1:n
     effright = sum(phi(2, :) .* sh(1, :)) / pdrop / h^2;
     effcoe = 0.5 * (effleft + effright);
     eff_trial(t) = effcoe;
+
+    %Compute the mean area 
+    mean_area_single_trial(t) = mean([sv(:); sh(:)])
+
     % Debugging output
     fprintf('Trial %d, EPS concentration = %8.2f, effcoe = %8.6f\n', t, EPS_concentration, effcoe);
     end
+    %store all area mean results
+    mean_area_all(i,:)=mean_area_single_trial;
+
+    %compute the mean area of all trials
+    mean_area_plot(i) = mean(mean_area_single_trial);
+
     %store all trial results
-    eff_trial_all(i,:)=eff_trial;
-    % compute thee maen permaebility across all trials for specific EPS
+    eff_trial_all_perm(i,:)=eff_trial;
+    % compute the mean permaebility across all trials for specific EPS
     % concentriation
-    eff_mean_plot(i) = mean(eff_trial);
+    eff_mean_perm_plot(i) = mean(eff_trial);
     % Debugging output
       fprintf('effcoe = %8.6f\n',effcoe);
       fprintf('rmu and rsig: %12.6f %12.6f\n',rmu,rsig);
+      fprintf('thickenss: %12.6f\n',h)
 end
 random_i = randi(n);
 random_t = randi(trials);
@@ -140,20 +162,52 @@ hold on;
 
 % Plot the individual trial data points
 for i = 1:n
-    plot(repmat(EPS_con(i), 1, trials), eff_trial_all(i, :), 'bo'); % Trial data points
+    plot(repmat(EPS_con(i), 1, trials), eff_trial_all_perm(i, :), 'bo'); % Trial data points
 end
 % Calculate the standard deviation for each EPS concentration
-eff_std = std(eff_trial_all, 0, 2); % Standard deviation along the second dimension (across trials)
+eff_std = std(eff_trial_all_perm, 0, 2); % Standard deviation along the second dimension (across trials)
 
 % Plot the mean effective permeability with error bars
-errorbar(EPS_con, eff_mean_plot, eff_std, 'r-', 'LineWidth', 2, 'MarkerSize', 8); % Mean with error bars
+errorbar(EPS_con, eff_mean_perm_plot, eff_std, 'r-', 'LineWidth', 2, 'MarkerSize', 8); % Mean with error bars
 
 xlabel('EPS concentration');
 ylabel('Effective Permeability');
 title('Effect of EPS on Permeability for Multiple Trials');
 grid on;
 hold off;
- 
+
+% plot mean areae of pipes vs eff perm 
+figure;
+hold on;
+
+for i = 1:n
+    plot(repmat(mean_area_plot(i), 1, trials), eff_trial_all_perm(i, :), 'bo'); % Plot individual trial points
+end
+
+% Calculate the standard deviation for each mean area
+eff_std_area = std(eff_trial_all_perm, 0, 2); % Standard deviation across trials (same as before)
+
+% Plot the mean effective permeability with error bars
+errorbar(mean_area_plot, eff_mean_perm_plot, eff_std_area, 'r-', 'LineWidth', 2, 'MarkerSize', 8);
+
+xlabel('Mean Pipe Area');
+ylabel('Effective Permeability');
+title('Effect of Mean Pipe Area on Permeability for Multiple Trials');
+grid on;
+hold off;
+
+figure;
+hold on;
+
+plot(EPS_con, mean_area_plot, 'bo-', 'LineWidth', 2, 'MarkerSize', 8); % Blue circles connected with lines
+
+xlabel('EPS concentration');
+ylabel('Mean Pipe Area');
+title('Effect of EPS Concentration on Mean Pipe Area');
+grid on;
+
+hold off;
+
 figure;
 subplot(1,2,1);
 histogram(log(sv_final(:)), 50, 'FaceColor', 'b');
