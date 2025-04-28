@@ -166,3 +166,40 @@ ylabel('Frequency');
 title('Histogram of ln(sh)');
 
 sgtitle('Distribution of ln(A) for Pipe Cross-Sections After EPS Accumulation');
+
+% 1. EPS Concentration vs Effective Permeability
+colors = lines(m); % Create a colormap for m lines
+figure;
+hold on;
+for j = 1:m
+    plot(EPS_con, eff_mean_perm_plot(j,:), '-o','LineWidth',2, 'Color', colors(j,:), 'DisplayName', sprintf('vf0=%.2f', vf0_values(j)));
+end
+xlabel('EPS Concentration');
+ylabel('Effective Permeability');
+title('EPS Concentration vs Effective Permeability');
+legend('show', 'Location', 'bestoutside');
+grid on;
+
+% 2. Mean Area vs Effective Permeability
+figure;
+hold on;
+for j = 1:m
+    plot(mean_area_plot(j,:), eff_mean_perm_plot(j,:), '-s','LineWidth',2, 'Color', colors(j,:), 'DisplayName', sprintf('vf0=%.2f', vf0_values(j)));
+end
+xlabel('Mean Pipe Area');
+ylabel('Effective Permeability');
+title('Mean Pipe Area vs Effective Permeability');
+legend('show', 'Location', 'bestoutside');
+grid on;
+
+% 3. EPS Concentration vs Mean Area
+figure;
+hold on;
+for j = 1:m
+    plot(EPS_con, mean_area_plot(j,:), '-^','LineWidth',2, 'Color', colors(j,:), 'DisplayName', sprintf('vf0=%.2f', vf0_values(j)));
+end
+xlabel('EPS Concentration');
+ylabel('Mean Pipe Area');
+title('EPS Concentration vs Mean Pipe Area');
+legend('show', 'Location', 'bestoutside');
+grid on;
