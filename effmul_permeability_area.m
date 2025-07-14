@@ -26,7 +26,8 @@ clear all; clc; close all;
 %     (index i=nx+1).
 %
 %     Last modified: 3/23/2025
-%
+%     This implimentation takes into consideration EPS as some base value
+%     rather then coming from an ODE.
 %*************************************************************************
 
 nx = 256; %size of grid nxn power of 2
@@ -57,9 +58,9 @@ sh_all = cell(n, trials);
 
 % Parameter sweeps
 vf0_values = linspace(0.05, 0.25, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
-EPS_con = linspace(0, .0008, n); % EPS concentration sweep [kg/m^3]
+EPS_con = linspace(0, 25, n); % EPS concentration sweep [kg/m^3]
 rho_EPS = 1500; % EPS density [kg/m^3]
-parfor j = 1:m
+for j = 1:m
     vf0_current = vf0_values(j);
     for i = 1:n
         EPS_concentration = EPS_con(i); %[kg/m^3]
@@ -69,8 +70,10 @@ parfor j = 1:m
         for t = 1:trials
             % Compute modified am0_EPS based on current vf0 and EPS
             am0 = pi*(7.d-5 + 1.6d-4*vf0_current)^2; %[m^2]
-            am0_EPS = am0 * (1 - ((EPS_concentration)/rho_EPS))
-            
+            am0_EPS = am0 * (1 - ((EPS_concentration)/rho_EPS));
+                 fprintf("vf0 = %.3f, EPS = %.4f kg/m^3, am0 = %.2e, am0_EPS = %.2e\n", ...
+        vf0, EPS_concentration, am0, am0_EPS);
+
             am0_EPS_sum = am0_EPS_sum + am0_EPS; %[m^2]
             
             rmu = log(am0_EPS) - 0.5*rsig^2;
@@ -81,7 +84,7 @@ parfor j = 1:m
 
             % Volume and mass for EPS accumulation
             volume_total_v(j,i) = (sum(A_sv(:))) * h;
-            volume_total_h(j,i)= (sum(A_sh(:))) * h
+            volume_total_h(j,i)= (sum(A_sh(:))) * h;
 
             mass_EPS_total_v(j,i) = volume_total_v(j,i) * EPS_concentration;
             mass_EPS_total_h(j,i) = volume_total_h(j,i) * EPS_concentration;
@@ -96,8 +99,8 @@ parfor j = 1:m
             A_sv = max(0, A_sv - volume_EPS_v / h);
             A_sh = max(0, A_sh - volume_EPS_h / h);
             % Compute average EPS-adjusted pipe area
-            sv = (A_sv/pi).^2
-            sh = (A_sh/pi).^2
+            sv = (A_sv/pi).^2;
+            sh = (A_sh/pi).^2;
 
             sv_all{j,i,t} = sv;
             sh_all{j,i,t} = sh;
