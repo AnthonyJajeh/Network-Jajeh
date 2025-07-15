@@ -36,14 +36,14 @@
     rsig = .1; %variance 
     trials = 5; %number  of trials
     rho_EPS = 1500; % EPS density [kg/m^3]
-    max_iters = 100; 
+    max_iters = 5; 
     vf0_values = linspace(0.05, 0.25, max_iters);  % Sweep through various volume fractions
     
     %ODE model parameters 
     N_0 = 5;
     A_0 = .03;
-    phi = .01;
-    psi = .1;
+    phi = .1;
+    psi = .05;
     gamma = .01; 
     nu_1 = .2; 
     nu_2 = .05; 
@@ -53,10 +53,9 @@
     
     % Allocate storage for all vf0 runs
     all_results = cell(length(vf0_values), 1);
-    parfor vf_index = 1:length(vf0_values)
+    for vf_index = 1:length(vf0_values)
         eps_mass_total_vec = zeros(max_iters, 1);   % EPS mass [kg]
         eps_volume_total_vec = zeros(max_iters, 1); % EPS volume [m^3]
-        vf0 = vf0_values(vf_index); %curreent vf0 value
         EPS_conc_vec = zeros(max_iters+1,1); %store space for EPS from ODE
         eff_perm_vec = zeros(max_iters,1); %store space for effective perm
         sv_mat = zeros(nx+1, ny+1, max_iters); %storage for R^4 v
@@ -68,48 +67,92 @@
         A_vec = zeros(max_iters+1,1); % storage for initial condition of algae
         N_vec(1) = N_0;
         A_vec(1) = A_0;
+        vf0 = vf0_values(vf_index);  % Step 1: new vf0
+        
+        % Step 1a: Generate initial network geometry (depends on vf0)
         am0 = pi*(7e-5 + 1.6e-4*vf0)^2;
-        am0_EPS = am0 * (1 - (EPS_conc_vec(vf_index)) / rho_EPS);
-        rmu = log(am0_EPS) - 0.5 * rsig^2;
-        h = sqrt((2 * am0_EPS) / vf0);
+        rmu = log(am0) - 0.5 * rsig^2;
+        h = sqrt((2 * am0) / vf0);
         [A_sv_init, A_sh_init, ~, ~] = gen_pipes(rmu, rsig, nx, ny, h);
-        A_sv_current = A_sv_init;
-        A_sh_current = A_sh_init;
-        d_v = A_sv_current/ sum(A_sv_current(:));
-        d_h = A_sh_current / sum(A_sh_current(:));
-        for iter = 1:max_iters
+        d_v =.5* A_sv_init / sum(A_sv_init(:));
+        d_h = .5*A_sh_init / sum(A_sh_init(:));
+%%%
+% 
+% vf0=0.05;
+%      % Step 1a: Generate initial network geometry (depends on vf0)
+%         am0 = pi*(7e-5 + 1.6e-4*vf0)^2
+%         rmu = log(am0) - 0.5 * rsig^2
+%         h = sqrt((2 * am0) / vf0)
+%         [A_sv_init, A_sh_init, ~, ~] = gen_pipes(rmu, rsig, nx, ny, h);
+%         d_v = A_sv_init / sum(A_sv_init(:));
+%         d_h = A_sh_init / sum(A_sh_init(:));
+% 
+%         mean(d_h,'all')
+% 
+%         vf0=0.25;
+%      % Step 1a: Generate initial network geometry (depends on vf0)
+%         am0 = pi*(7e-5 + 1.6e-4*vf0)^2
+%         rmu = log(am0) - 0.5 * rsig^2
+%         h = sqrt((2 * am0) / vf0)
+%         [A_sv_init, A_sh_init, ~, ~] = gen_pipes(rmu, rsig, nx, ny, h);
+%         d_v = A_sv_init / sum(A_sv_init(:));
+%         d_h = A_sh_init / sum(A_sh_init(:));
+% 
+%         mean(d_h,'all')
+    
+        % Step 1b: Compute perm_0 using network model with EPS = 0
+        EPS_conc_kgm3 = 0;
+        [eff_perm_0, sv, sh, A_sv_current, A_sh_current] = run_network_model(...
+            EPS_conc_kgm3, nx, ny, rho_EPS, trials, pdrop, ...
+            A_sv_init, A_sh_init, d_v, d_h, h);
+        perm_0 = eff_perm_0;  % This is the baseline
+
+        % Step 1c: Run ODE with no EPS using NAE_base
+        IC = [N_0; A_0; 0];
+        [~, Y] = ode45(@(t,D) NAE_base(t, D, phi, psi, nu_1, nu_2, ...
+                        xi, delta, eta, gamma,vf0), [0 250], IC);
+        N_vec(2) = Y(end,1);
+        A_vec(2) = Y(end,2);
+        EPS_conc_vec(2) = Y(end,3);
+            
+            % Store initial network outputs
+            eff_perm_vec(1) = perm_0;
+            sv_mat(:,:,1) = sv;
+            sh_mat(:,:,1) = sh;
+            A_sv_mat(:,:,1) = A_sv_current;
+            A_sh_mat(:,:,1) = A_sh_current;
+            
+        for iter = 2:max_iters
            EPS_conc_mgL = EPS_conc_vec(iter); % This is the total EPS concentration so far
            EPS_conc_kgm3 = EPS_conc_mgL * 1e-3;
-           
+
             % Run network model using cumulative EPS volume
             [eff_perm, sv, sh, A_sv_new, A_sh_new] = run_network_model(EPS_conc_kgm3, nx, ny, rho_EPS, trials,pdrop, A_sv_current, A_sh_current, d_v, d_h, h);
-               fprintf('vf0 %g: iteration %d: cumulative EPS = %.4e kg/m^3, eff_perm = %.4e m^2\n', ...
-        vf0, iter, EPS_conc_kgm3, eff_perm);
-            % Save outputs
+            fprintf('vf0 %g: iteration %d: cumulative EPS = %.4e kg/m^3, eff_perm = %.4e m^2, eff_perm/perm %g:\n', ...
+        vf0, iter, EPS_conc_kgm3, eff_perm, eff_perm/perm_0);
             eff_perm_vec(iter) = eff_perm;
             sv_mat(:,:,iter) = sv;
             sh_mat(:,:,iter) = sh;
             A_sv_mat(:,:,iter) = A_sv_new;
             A_sh_mat(:,:,iter) = A_sh_new;
-            
+
             % Update pipe areas for next iteration
             A_sv_current = A_sv_new;
             A_sh_current = A_sh_new;
-
+             % After you get new A_sv_current and A_sh_current:
+            d_v = A_sv_current / sum(A_sv_current(:));
+            d_h = A_sh_current / sum(A_sh_current(:));
+            display(perm_0)
             %Solve NAE model wtih current effective permeability
             tspan = [0 250];
             IC = [N_vec(iter); A_vec(iter); EPS_conc_mgL];
-            if EPS_conc_mgL ==0
-                ode_fun = @(t,D) NAE_base(t, D, phi, psi, nu_1, nu_2, xi, delta, eta, gamma);
-                perm_0 = eff_perm;
-            else
                 ode_fun = @(t,D) NAE(t, D,perm_0, eff_perm, phi, psi, nu_1, nu_2, xi, delta, eta, gamma);
-            end
+
             [T, Y] = ode45(ode_fun, tspan, IC);
-    
+
             N_vec(iter+1)= Y(end, 1);
             A_vec(iter+1)= Y(end, 2);
-            EPS_conc_vec(iter+1) = EPS_conc_vec(iter) + Y(end,3);  % If Y(end,3) is dE/dt
+            EPS_conc_vec(iter+1) =  Y(end,3);  % If Y(end,3) is dE/dt
 
         end
            all_results{vf_index} = struct('vf0', vf0, 'EPS_conc_vec', EPS_conc_vec, 'eff_perm_vec', eff_perm_vec, 'N_vec', N_vec, 'A_vec', A_vec, 'sv_mat', sv_mat, 'sh_mat', sh_mat,'A_sv_mat', A_sv_mat, 'A_sh_mat', A_sh_mat,'eps_mass_total_vec', eps_mass_total_vec,'eps_volume_total_vec', eps_volume_total_vec);
