@@ -23,7 +23,8 @@ n_E = (N_E-1)*(N_x-2);
 dydt_blocks = cell(2*n_pipes,1);
 
 offset=0;
-
+prev_pipe_outlet_B = [];
+prev_pipe_outlet_E = [];
 for p =1:n_pipes
     drB = dr_B(p);
     drE = dr_E(p);
@@ -47,33 +48,47 @@ for p =1:n_pipes
   % Axial BCs for brine
     if p == 1
         B(:,1) = param.C_in;
+        E(2:N_E,1) = 0;
     else
-        B(:,1) = prev_pipe_outlet;
+        B(:,1) = prev_pipe_outlet_B;
+        E(2:N_E,1) = prev_pipe_outlet_E(2:N_E);
+    end
+   if p == n_pipes
+        % final outlet
+        B(1:N_B-1,N_x) = param.C_out_B;
+        E(2:N_E,N_x)   = param.C_out_E;
+    else
+        % feed next pipe
+        B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1);
+         E(2:N_E,N_x)   = E(2:N_E,N_x-1);
     end
 
     % Top outflow for brine interior rows only
-    B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1);
 
-    % Axial BCs for EPS: zero x-derivative
-    E(:,1)   = E(:,2);
-    E(:,N_x) = E(:,N_x-1);
-
+    
     % Interface reconstruction at r = a(p)
     for k = 2:N_x-1
         B(N_B,k) = (D_B*drE*B(N_B-1,k) + D_E*drB*E(2,k)) ...
                  / (D_B*drE + D_E*drB);
         E(1,k) = B(N_B,k);
     end
-
+        B(N_B,1) = B(N_B,2);
  % Boundary interface values
-    B(N_B,1)   = B(N_B,2);
-    B(N_B,N_x) = B(N_B,N_x-1);
+    B(N_B,1) = (D_B*drE*B(N_B-1,1) + D_E*drB*E(2,1)) ...
+             / (D_B*drE + D_E*drB);
+
+    B(N_B,N_x) = (D_B*drE*B(N_B-1,N_x) + D_E*drB*E(2,N_x)) ...
+               / (D_B*drE + D_E*drB);
 
     E(1,1)   = B(N_B,1);
     E(1,N_x) = B(N_B,N_x);
 
     % Save outlet of this pipe for next pipe
-    prev_pipe_outlet = B(:,N_x);
+    if p < n_pipes
+        prev_pipe_outlet_B = B(:,N_x);
+        prev_pipe_outlet_E = E(:,N_x);
+    end
+
 
     % Time derivatives
     dB_dt = zeros(N_B-1, N_x-2);
