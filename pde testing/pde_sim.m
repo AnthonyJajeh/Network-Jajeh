@@ -12,11 +12,11 @@ N_E = 10;     % number of EPS radial nodes
 N_x = 10;     % number of axial nodes
 
 vf0_current = .25;
-sigma_A = .1;
+sigma_A = .5;
 am0 = pi*(7.d-5 + 1.6e-4*vf0_current)^2; %[m^2]
 mu_A = log(am0)-.5*sigma_A^2;
 
-n_cols = 6; %number of column
+n_cols = 20; %number of column
 n_pipes_per_col=10; %number of pipes per column
 n_pipes = n_cols*n_pipes_per_col; %total number of pipes
 A = (exp(mu_A+sigma_A*randn(1,n_pipes)))'; %logN cross sectional area
@@ -136,9 +136,15 @@ n_E = (N_E-1)*(N_x-2);
 % Stack into one long vector
 y0 = zeros(n_pipes*(n_B+n_E),1);
 
-tspan = linspace(0,5000);
+tspan = linspace(0,5000,50);
 steady_tol = 1e-6;
-opts = odeset('RelTol',1e-4,'AbsTol',1e-6,'Events', @(t,y) steady_state_event(t,y,params,steady_tol));
+n_pipe_state = n_B +n_E;
+n_col_state = n_pipes_per_col*n_pipe_state;
+
+J_col = spones(sparse(ones(n_col_state,n_col_state)));
+J_pat = kron(speye(n_cols),J_col);
+
+opts = odeset('RelTol',1e-4,'AbsTol',1e-6, 'JPattern',J_pat,'Events', @(t,y) steady_state_event(t,y,params,steady_tol));
 tic
 [t,y,te,ye,ie] = ode15s(@(t,y) pde_rhs(t,y,params), tspan, y0, opts);
 toc
@@ -524,21 +530,26 @@ cmin = inf;
 cmax = -inf;
 
 Rmax = max(R);
-Nr_plot = 60;
+Nr_plot = 30;
 r_plot = linspace(-Rmax, Rmax, Nr_plot);
 
 % Horizontal spacing between columns
 col_spacing = 3.0*Rmax;
 
 % ---------------------------------------------------------
-% Get common color limits over all pipes
+% Fast color limits: use final time only
 % ---------------------------------------------------------
+cmin_t = inf;
+cmax_t = -inf;
+
+y_n = y(end,:)';
+
 for p = 1:n_pipes
 
     offset = (p-1)*(n_B+n_E);
 
-    B_stored = reshape(y_m(offset + (1:n_B)), N_B-1, N_x-2);
-    E_stored = reshape(y_m(offset + n_B + (1:n_E)), N_E-1, N_x-2);
+    B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
+    E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
 
     drB = Delta_r_B(p);
     drE = Delta_r_E(p);
@@ -546,14 +557,13 @@ for p = 1:n_pipes
     B_interface = (D_B*drE*B_stored(end,:) + D_E*drB*E_stored(1,:)) ...
                 / (D_B*drE + D_E*drB);
 
-    F = build_display_field(B_stored,E_stored,B_interface, ...
-        r_B(:,p),r_E(:,p),a(p),R(p),r_plot);
+    F = build_display_field(B_stored, E_stored, B_interface, ...
+        r_B(:,p), r_E(:,p), a(p), R(p), r_plot);
 
-    cmin = min(cmin, min(F(:), [], 'omitnan'));
-    cmax = max(cmax, max(F(:), [], 'omitnan'));
+    cmin_t = min(cmin_t, min(F(:), [], 'omitnan'));
+    cmax_t = max(cmax_t, max(F(:), [], 'omitnan'));
 
 end
-
 % ---------------------------------------------------------
 % Plot each column side-by-side
 % ---------------------------------------------------------
@@ -635,9 +645,11 @@ hold off
 % STACKED TIME ANIMATION ONLY
 % =========================================================
 figure('Position',[100 100 650 1000]);
+
 v = VideoWriter('nutrient_stacked_pipes.mp4', 'MPEG-4');
-v.FrameRate = 10;
+v.FrameRate = 1;
 open(v);
+colorbar
 % =========================================================
 % MULTIPLE COLUMN TIME ANIMATION
 % =========================================================
@@ -682,13 +694,27 @@ end
 % ---------------------------------------------------------
 % Make animation
 % ---------------------------------------------------------
-for n = 1:length(t)
+
+video_dt = 10;  % show one frame every 5 simulation seconds
+
+frame_times = 0:video_dt:t(end);
+frame_idx = zeros(size(frame_times));
+
+for k = 1:length(frame_times)
+    [~, frame_idx(k)] = min(abs(t - frame_times(k)));
+end
+
+frame_idx = unique(frame_idx);
+
+for kk = 1:length(frame_idx)
+
+    n = frame_idx(kk);
 
     clf
+    set(gcf,'Position',[100 100 650 1000])
     hold on
 
     y_n = y(n,:)';
-
     for c = 1:n_cols
 
         x_shift = (c-1)*col_spacing;
@@ -765,12 +791,15 @@ for n = 1:length(t)
     h.Units = 'normalized';
     h.Position(2) = 1.05;
 
-    colorbar
-    hold off
-    drawnow
+    
+  colorbar
+hold off
+drawnow
 
+frame = getframe(gcf);
+writeVideo(v, frame);
 end
-
+close(v);
 % =========================================================
 % Local function
 % =========================================================

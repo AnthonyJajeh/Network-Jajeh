@@ -26,7 +26,6 @@ dydt_col_blocks = cell(n_cols,1);
 for c = 1:n_cols
 
     local_blocks = cell(2*n_pipes_per_col,1);
-
     prev_pipe_outlet_B = [];
     prev_pipe_outlet_E = [];
     for q =1:n_pipes_per_col
