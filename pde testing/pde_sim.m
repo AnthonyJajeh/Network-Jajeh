@@ -7,17 +7,17 @@ D_E = 1e-10;
 lambda = 1;
 mu_fluid = 1.8e-3;   % viscosity [Pa*s]
 
-N_B = 10;     % number of brine radial nodes
-N_E = 10;     % number of EPS radial nodes
+N_B = 20;     % number of brine radial nodes
+N_E = 20;     % number of EPS radial nodes
 N_x = 25;     % number of axial nodes
 
 vf0_current = .25;
-sigma_A = .5;
+sigma_A = .25;
 
 am0 = pi*(7.e-5 + 1.6e-4*vf0_current)^2; %[m^2]
 mu_A = log(am0)-.5*sigma_A^2;
 
-n_cols = 5; %number of column
+n_cols = 10; %number of column
 n_pipes_per_col=5; %number of pipes per column
 n_pipes = n_cols*n_pipes_per_col; %total number of pipes
 
@@ -571,7 +571,7 @@ for c = 1:n_cols
     x_dense = linspace(min(x_unique), max(x_unique), n_plot_dense);
 
     % Shape-preserving interpolation for visualization
-    E_dense = interp1(x_unique, E_unique, x_dense, 'pchip');
+    E_dense = interp1(x_unique, E_unique, x_dense, 'linear');
 
     plot(x_dense, E_dense, 'LineWidth', 2, ...
         'DisplayName', sprintf('Column %d', c));
@@ -640,7 +640,7 @@ for c = 1:n_cols
     E_unique = E_all(ia);
 
     % Interpolate onto common plotting grid
-    E_dense = interp1(x_unique, E_unique, x_dense_common, 'pchip', 'extrap');
+    E_dense = interp1(x_unique, E_unique, x_dense_common, 'linear', 'extrap');
 
     E_by_col_dense(c,:) = E_dense;
 
