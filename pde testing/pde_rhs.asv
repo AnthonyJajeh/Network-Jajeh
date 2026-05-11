@@ -1,0 +1,168 @@
+function dydt = pde_rhs(~,y,param)
+N_B = param.N_B;
+N_E = param.N_E;
+N_x = param.N_x;
+
+n_pipes = param.n_pipes;
+n_cols=param.n_cols;
+n_pipes_per_col=param.n_pipes_per_col;
+
+D_B = param.D_B;
+D_E = param.D_E;
+lambda = param.lambda;
+
+dx = param.Delta_x;
+
+dr_B = param.Delta_r_B;
+dr_E = param.Delta_r_E;
+
+r_B_all = param.r_B;
+r_E_all = param.r_E;
+u_all   = param.u;
+
+n_B = (N_B-1)*(N_x-2);
+n_E = (N_E-1)*(N_x-2);
+
+dydt_col_blocks = cell(n_cols,1);
+
+for c = 1:n_cols
+
+    local_blocks = cell(2*n_pipes_per_col,1);
+    prev_pipe_outlet_B = [];
+    prev_pipe_outlet_E = [];
+    prev_rB_out = [];
+    prev_rE_out = [];
+    for q =1:n_pipes_per_col
+        p = (c-1)*n_pipes_per_col+q;
+        drB = dr_B(p);
+        drE = dr_E(p);
+    
+        rB = r_B_all(:,p);
+        rE = r_E_all(:,p);
+        u  = u_all(:,p);
+          % Unpack this pipe
+          pipe_offset=(p-1)*(n_B+n_E);
+
+        B_stored = reshape(y(pipe_offset + (1:n_B)), N_B-1, N_x-2);
+        pipe_offset = pipe_offset + n_B;
+    
+        E_stored = reshape(y(pipe_offset + (1:n_E)), N_E-1, N_x-2);
+        pipe_offset = pipe_offset + n_E;
+    
+        % Reconstruct full arrays
+        B = zeros(N_B,N_x);
+        E = zeros(N_E,N_x);
+    
+        B(1:N_B-1,2:N_x-1) = B_stored;
+        E(2:N_E,2:N_x-1)   = E_stored;
+      % Axial BCs for brine
+        if q == 1
+            B(:,1) = param.C_in;
+            E(:,1) = 0;
+        else
+            B(:,1) = prev_pipe_outlet_B;
+            E(:,1) = prev_pipe_outlet_E;
+        end
+    
+       if q == n_pipes_per_col
+           %nonzero neumann
+          
+           JB_out = param.JB_out;
+           JE_out = param.JE_out;
+            qB = -JB_out / D_B;
+            qE = -JE_out / D_E;
+            % final outlet
+            B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1)+qB*dx;
+            E(2:N_E,N_x)   = E(2:N_E,N_x-1)+ qE*dx;
+        else
+            % feed next pipe
+            B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1);
+            E(2:N_E,N_x)   = E(2:N_E,N_x-1);
+        end
+    
+        % Top outflow for brine interior rows only
+    
+        
+        % Interface reconstruction at r = a(p)
+        for k = 2:N_x-1
+            B(N_B,k) = (D_B*drE*B(N_B-1,k) + D_E*drB*E(2,k)) ...
+                     / (D_B*drE + D_E*drB);
+            E(1,k) = B(N_B,k);
+        end
+            B(N_B,1) = B(N_B,2);
+     % Boundary interface values
+        B(N_B,1) = (D_B*drE*B(N_B-1,1) + D_E*drB*E(2,1)) ...
+                 / (D_B*drE + D_E*drB);
+    
+        B(N_B,N_x) = (D_B*drE*B(N_B-1,N_x) + D_E*drB*E(2,N_x)) ...
+                   / (D_B*drE + D_E*drB);
+    
+        E(1,1)   = B(N_B,1);
+        E(1,N_x) = B(N_B,N_x);
+    
+        % Save outlet of this pipe for next pipe
+        if q < n_pipes_per_col
+            prev_pipe_outlet_B = B(:,N_x);
+            prev_pipe_outlet_E = E(:,N_x);
+        end
+    
+    
+        % Time derivatives
+        dB_dt = zeros(N_B-1, N_x-2);
+        dE_dt = zeros(N_E-1, N_x-2);
+    
+     %Brine equation
+      for k = 2:N_x-1
+            kk = k - 1;
+    
+            % centerline j = 1
+            radial_term = 4*(B(2,k) - B(1,k))/drB^2;
+            axial_diff  = (B(1,k+1) - 2*B(1,k) + B(1,k-1))/dx^2;
+            axial_adv   = u(1)*(B(1,k) - B(1,k-1))/dx;
+    
+            dB_dt(1,kk) = D_B*(radial_term + axial_diff) - axial_adv;
+    
+    
+            % interior j = 2,...,N_B-1
+            for j = 2:N_B-1
+                radial_term = (B(j+1,k) - 2*B(j,k) + B(j-1,k))/drB^2 ...
+                            + (1/rB(j))*(B(j+1,k) - B(j-1,k))/(2*drB);
+    
+                axial_diff = (B(j,k+1) - 2*B(j,k) + B(j,k-1))/dx^2;
+                axial_adv  = u(j)*(B(j,k) - B(j,k-1))/dx;
+    
+                dB_dt(j,kk) = D_B*(radial_term + axial_diff) - axial_adv;
+            end
+      end
+     % -------------------------
+        % EPS equation
+        % -------------------------
+        for k = 2:N_x-1
+            kk = k - 1;
+    
+            % interior j = 2,...,N_E-1
+            for j = 2:N_E-1
+                radial_term = (E(j+1,k) - 2*E(j,k) + E(j-1,k))/drE^2 ...
+                            + (1/rE(j))*(E(j+1,k) - E(j-1,k))/(2*drE);
+    
+                axial_diff = (E(j,k+1) - 2*E(j,k) + E(j,k-1))/dx^2;
+    
+                dE_dt(j-1,kk) = D_E*(radial_term + axial_diff) - lambda*E(j,k);
+            end
+    
+            % outer wall j = N_E, no-flux
+            radial_term = 2*(E(N_E-1,k) - E(N_E,k))/drE^2;
+            axial_diff  = (E(N_E,k+1) - 2*E(N_E,k) + E(N_E,k-1))/dx^2;
+
+            dE_dt(N_E-1,kk) = D_E*(radial_term + axial_diff) - lambda*E(N_E,k);
+        end
+        local_blocks{2*q-1} = dB_dt(:);
+        local_blocks{2*q}   = dE_dt(:);
+        
+    end
+
+    dydt_col_blocks{c} = vertcat(local_blocks{:});
+
+end
+
+dydt = vertcat(dydt_col_blocks{:});

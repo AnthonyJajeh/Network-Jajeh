@@ -42,11 +42,11 @@
     %ODE model parameters 
     N_0 = .2* 1e-3;
     A_0 = .03* 1e-3;
-    phi = .01*1e-3;
+    phi_perm = .01*1e-3;
     psi = .01;
     gamma = .01*1e-3; 
-    nu_1 = .2; 
-    nu_2 = .75; 
+    nu = .2; 
+    rho = .75; 
     xi = .2;
     delta = .007; 
     eta = .03;
@@ -74,9 +74,6 @@ parfor vf_index = 1:length(vf0_values)
     am0 = pi*(7e-5 + 1.6e-4*vf0)^2;
     rmu = log(am0) - 0.5 * rsig^2;
     h   = sqrt((2 * am0) / vf0);
-    Lx = nx * h;
-    Ly = ny * h;
-    V_pore = Lx * Ly * h * vf0;   % total brine (pore) volume for this run
 
     [A_sv_init, A_sh_init, ~, ~] = gen_pipes(rmu, rsig, nx, ny, h);
 
@@ -86,13 +83,53 @@ parfor vf_index = 1:length(vf0_values)
 
     % ----- Step 1b: baseline permeability, EPS = 0 ----------------------
     dEPS_conc_kgm3 = 0; % incremental addition (kg/m^3)
-    [eff_perm_0, sv, sh, A_sv_current, A_sh_current] = run_network_model( ...
-    0, nx, ny, rho_EPS, trials, pdrop, ...
-    A_sv_current, A_sh_current, [], [], h, V_pore, 0);
+     % Provisional conductances from current areas (before deposition)
+            sv_temp = (A_sv_acc/pi).^2;
+            sh_temp = (A_sh_acc/pi).^2;
+
+            % % Flow-capacity weights: C ∝ sv_tmp / h  (constants cancel in normalization)
+            W_v = A_sv_acc/sum(A_sv_acc(:));
+            W_h = A_sh_acc/sum(A_sh_acc(:));
+           
+
+            %current brine volume [m^3]
+            vol_v = sum(A_sv_acc(:))*h;
+            vol_h = sum(A_sh_acc(:))*h;
+            
+            %Incremental EPS mass from a concentration step dEPS [kg/m^3]
+            dmass_EPS_v = vol_v * dEPS;
+            dmass_EPS_h = vol_h * dEPS;
+              % Allocate EPS volume per edge: V = (mass / density) * weight
+            Veps_v = (dmass_EPS_v / rho_EPS) * W_v;   % m^3 per edge
+            Veps_h = (dmass_EPS_h / rho_EPS) * W_h;   % m^3 per edge
+
+              % Convert deposited volume to area decrement: ΔA = V / h
+            dA_v = Veps_v / h;   % m^2
+            dA_h = Veps_h / h;   % m^2
+
+            % Update areas (clip at 0)
+            A_sv_acc = max(0, A_sv_acc - dA_v);
+            A_sh_acc = max(0, A_sh_acc - dA_h);
+
+            % Conductances after deposition (used in solver)
+            sv = (A_sv_acc/pi).^2; 
+            sh = (A_sh_acc/pi).^2;
+
+        
+            % Solve using multigrid (kikmul)
+            fin = zeros(nx + 1, ny + 1);
+            [phi, final_error] = kikmul(fin, pdrop, sv, sh, nx, ny);
+
+            % Effective permeability computation
+            effleft = sum((pdrop - phi(nx, :)) .* sh(nx, :)) / pdrop / h^2;
+            effright = sum(phi(2, :) .* sh(1, :)) / pdrop / h^2;
+            effcoe = (0.5 * (effleft + effright))*(pi/8);
+            eff_perm_0 = effcoe;
+
 
     % ----- Step 1c: ODE with no EPS to get next state -------------------
     IC0 = [N_0; A_0; 0];
-    [~, Y0] = ode23s(@(t,D) NAE_base(t, D, phi, psi, nu_1, nu_2, xi, delta, eta, gamma, vf0), [0 250], IC0);
+    [~, Y0] = ode23s(@(t,D) NAE(t, D,k_0,rho_EPS, phi_perm, psi, nu, rho, xi, delta, eta, gamma), [0 5], IC0);
     N_vec(2)       = Y0(end,1);
     A_vec(2)       = Y0(end,2);
     EPS_conc_vec(2)= Y0(end,3);     % mg/L
@@ -104,15 +141,7 @@ parfor vf_index = 1:length(vf0_values)
     A_sh_mat(:,:,1) = A_sh_current;
     perm_0 = eff_perm_0;
     eff_perm_current = perm_0;   % <-- use this for iter 2 ODE
-    eff_perm_vec(1) = perm_0;    % <-- baseline point for plots (p/p0, drop%)
-    alphaT = 0.7; 
-    beta_mu = 0;
-    Eref = 1e-6;   % T knobs (beta_mu=0 means no extra viscosity term)
-    w_phi  = 0.7; 
-    w_nu  = 0.6;             % how transport-limited phi, nu1 are
-    theta0 = 0.25; 
-    theta_slope = 0.6;      % deposition fraction base & extra when clogged
-    mu_opt = .001*1e-3;                            % or set to your old 'mu' if you used exp(-E/mu)
+    eff_perm_vec(1) = perm_0;    % <-- baseline point for plots (p/p0, drop%)                        % or set to your old 'mu' if you used exp(-E/mu)
          % ----- Iterations ----------------------------------------------------
     for iter = 2:max_iters
        tspan = [0 5];
@@ -120,37 +149,43 @@ parfor vf_index = 1:length(vf0_values)
        IC=[N_vec(iter); A_vec(iter); E_current];
 
        
-       ode_fun = @(t,D) NAE(t, D, perm_0, eff_perm_current, ...
-            phi, psi, nu_1, nu_2, xi, delta, eta, gamma, ...
-            alphaT, beta_mu, Eref, w_phi, w_nu, mu_opt,vf0);
+       ode_fun = @(t,D)  NAE(t, D,k_0,rho_EPS, phi_perm, psi, nu, rho, xi, delta, eta, gamma), [0 5], IC0);
        [T,Y] = ode23s(ode_fun,tspan,IC)
 
        N_next = Y(end,1);
        A_next = Y(end,2);
        E_next = Y(end,3);
 
+            sv_temp = (A_sv_new/pi).^2;
+            sh_temp = (A_sh_new/pi).^2;
 
-       % ---- 2) Compute EPS PRODUCTION over this step (mg/L) ----
-       % From dE/dt = rho*A - eta*E  =>  ∫rho A dt = (E_next - E_i) + ∫eta E dt
-       prod_kgm3 = (E_next - E_current) + trapz(T, eta * Y(:,3));
-       prod_kgm3 = max(prod_kgm3, 0);                  % never let production be negative
+            % % Flow-capacity weights: C ∝ sv_tmp / h  (constants cancel in normalization)
+            W_v = A_sv_acc/sum(A_sv_new(:));
+            W_h = A_sh_acc/sum(A_sh_new(:));
+           
 
-       % make deposition stickier as network clogs via T based on permeability
-       clog_base = 1.0;
-       T_now = min(1, max(0, (eff_perm_current / max(perm_0, eps))^alphaT ));
-       theta_dep_eff = min(1, theta0 + theta_slope*(1 - T_now));
-       fixed_clog = clog_base * (1 + 0.5*(1 - T_now));
-       fixed_clog = min(max(fixed_clog, 0), 1e12);
+            %current brine volume [m^3]
+            vol_v = sum(A_sv_new(:))*h;
+            vol_h = sum(A_sh_new(:))*h;
+            
+            %Incremental EPS mass from a concentration step dEPS [kg/m^3]
+            dmass_EPS_v = vol_v * dEPS;
+            dmass_EPS_h = vol_h * dEPS;
+              % Allocate EPS volume per edge: V = (mass / density) * weight
+            Veps_v = (dmass_EPS_v / rho_EPS) * W_v;   % m^3 per edge
+            Veps_h = (dmass_EPS_h / rho_EPS) * W_h;   % m^3 per edge
 
-     
-         % Deposit a fraction of production
-       dEPS_conc_kgm3 = theta_dep_eff* prod_kgm3        % kg/m^3
+              % Convert deposited volume to area decrement: ΔA = V / h
+            dA_v = Veps_v / h;   % m^2
+            dA_h = Veps_h / h;   % m^2
 
+            % Update areas (clip at 0)
+            A_sv_acc = max(0, A_sv_acc - dA_v);
+            A_sh_acc = max(0, A_sh_acc - dA_h);
 
-       [eff_perm_next, sv, sh, A_sv_new, A_sh_new] = run_network_model( ...
-        dEPS_conc_kgm3, nx, ny, rho_EPS, trials, pdrop, ...
-        A_sv_current, A_sh_current, [], [], h, V_pore, fixed_clog);
-
+            % Conductances after deposition (used in solver)
+            sv = (A_sv_acc/pi).^2; 
+            sh = (A_sh_acc/pi).^2;
     eff_perm_vec(iter) = eff_perm_next;
     sv_mat(:,:,iter)   = sv;
     sh_mat(:,:,iter)   = sh;

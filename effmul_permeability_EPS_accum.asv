@@ -39,8 +39,8 @@ rsig = .5; %variance of lognormal distribution
 trials = 5; %number  of trials
 ph = 0; %probability of horizontal pipe breaking
 pv = 0; %probability of vertical pipe breaking
-n = 100;%number of deposit steps;
-m = 1;
+n = 15;%number of deposit steps;
+m = 10;
 
 eff_mean_perm_plot = zeros(m, n); % mean effective permeability
 eff_trial_all_perm = zeros(m, n, trials); % all permeability trials
@@ -55,7 +55,7 @@ am0_EPS_mean = zeros(m, n);% Before loops
 domain = [0 n];
 
 % Parameter sweeps
-vf0_values = linspace(0.05, .05, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
+vf0_values = linspace(0.05, 0.25, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
 EPS_con = linspace(0, 3000, n); % EPS concentration sweep [kg/m^3]
 rho_EPS = 1500; % EPS density [kg/m^3]
 for j = 1:m
@@ -90,6 +90,10 @@ for j = 1:m
             sh_temp = (A_sh_acc/pi).^2;
 
             % % Flow-capacity weights: C ∝ sv_tmp / h  (constants cancel in normalization)
+            % C_v = sv_temp/h;
+            % C_h = sh_temp/h;
+            % W_v = C_v / (sum(C_v(:)) + eps);
+            % W_h = C_h / (sum(C_h(:)) + eps);
             W_v = A_sv_acc/sum(A_sv_acc(:));
             W_h = A_sh_acc/sum(A_sh_acc(:));
            
@@ -195,67 +199,26 @@ for j = 1:mRows
     R2(j) = 1 - ss_res/ss_tot;
 end
 
-GOF = struct('vf0',[],'RMSE',[],'NRMSE_range',[],'NRMSE_std',[],'MAE',[], ...
-             'MSE',[],'NMSE',[],'R2_log',[]);
-
+% Plot: data + fitted curve (one panel per vf0)
+figure;
+rows = ceil(mRows/3); cols = 3;
 for j = 1:mRows
-    % observed data for this phi (use only valid positive entries)
-    k_obs = K(j,:).';
-    valid = isfinite(k_obs) & (k_obs > 0);
-    c_obs = C(valid);
-    k_obs = k_obs(valid);
+    subplot(rows, cols, j);
+    % data
+    semilogy(C, K(j,:), 'o', 'LineWidth', 1.5); hold on; grid on;
 
-    % model prediction at the *observed* points
-    k_hat = k0_hat(j) * exp(-a_hat(j) * c_obs);
+    % fitted curve on smooth grid
+    Cfine = linspace(min(C), max(C), 200).';
+    Kfit  = k0_hat(j) * exp(-a_hat(j) * Cfine);
+    semilogy(Cfine, Kfit, '-', 'LineWidth', 2);
 
-    % --- try toolbox function if available ---
-    try
-        % RMSE normalized by data range (0 = perfect, 1 = as bad as using mean? depends on option)
-        nrmse_range = goodnessOfFit(k_hat, k_obs, 'NRMSE');            % default normalization is by range
-        mse         = goodnessOfFit(k_hat, k_obs, 'MSE');
-        rmse        = sqrt(mse);
-        % If your MATLAB supports these:
-        % mae     = goodnessOfFit(k_hat, k_obs, 'MAE');
-        % nmse    = goodnessOfFit(k_hat, k_obs, 'NMSE');   % normalized MSE by variance
-
-    catch
-        % --- manual fallbacks (no toolbox needed) ---
-        err  = k_hat - k_obs;
-        mse  = mean(err.^2);
-        rmse = sqrt(mse);
-        mae  = mean(abs(err));
-        % NRMSE normalized by data range and by std (two common variants)
-        rng  = max(k_obs) - min(k_obs);  if rng==0, rng = 1; end
-        nrmse_range = rmse / rng;
-        sd   = std(k_obs, 1);            if sd==0, sd = 1; end
-        nrmse_std   = rmse / sd;
-        nmse = mse / (sd^2);
-    end
-
-    % Your log-space R^2 already computed as R2(j). Keep it alongside.
-    GOF(j).vf0          = vf0_values(j);
-    GOF(j).RMSE         = rmse;
-    GOF(j).NRMSE_range  = nrmse_range;
-    GOF(j).NRMSE_std    = exist('nrmse_std','var') * nrmse_std + ~exist('nrmse_std','var') * NaN;
-    GOF(j).MAE          = exist('mae','var') * mae + ~exist('mae','var') * NaN;
-    GOF(j).MSE          = mse;
-    GOF(j).NMSE         = exist('nmse','var') * nmse + ~exist('nmse','var') * NaN;
-    GOF(j).R2_log       = R2(j);   % from your log-space fit
+    xlabel('EPS concentration, C (kg m^{-3})');
+    ylabel('k (m^2)');
+    title(sprintf('\\phi=%.2f | k0=%.2e, a=%.3g, R^2=%.3f', ...
+        vf0_values(j), k0_hat(j), a_hat(j), R2(j)));
+    legend('data','exp fit','Location','best');
 end
-
-% Pretty table
-vf0_col = [GOF.vf0].';
-RMSE_col = [GOF.RMSE].';
-NRMSEr_col = [GOF.NRMSE_range].';
-NRMSEs_col = [GOF.NRMSE_std].';
-MAE_col = [GOF.MAE].';
-MSE_col = [GOF.MSE].';
-NMSE_col = [GOF.NMSE].';
-R2log_col = [GOF.R2_log].';
-
-GOF_Table = table(vf0_col, RMSE_col, NRMSEr_col, NRMSEs_col, MAE_col, MSE_col, NMSE_col, R2log_col, ...
-    'VariableNames', {'vf0','RMSE','NRMSE_range','NRMSE_std','MAE','MSE','NMSE','R2_log'});
-disp(GOF_Table);
+sgtitle('Simple exponential fits: k(C) = k_0 e^{-a C} per \\phi');
 
 % --- Subplots: EPS vs Effective Permeability with exponential fit overlay ---
 figure;
@@ -388,25 +351,7 @@ for i = 1:n_eps
     title(sprintf('EPS = %.3g kg m^{-3}', EPS_con(i)));
 end
 
-% --- Subplots: Expected Area vs Effective Permeability (one panel per vf0) ---
-figure;
-rows = ceil(m/3);
-cols = 3;
-
-for j = 1:m
-    subplot(rows, cols, j);
-    hold on; grid on;
-    
-    % plot mean area vs permeability for this φ
-    plot(mean_area_plot(j,:), eff_mean_perm_plot(j,:), 'o-', 'LineWidth', 1.5);
-    
-    set(gca, 'YScale','log'); % permeability usually log scale
-    xlabel('E[A] (m^2)');
-    ylabel('k (m^2)');
-    title(sprintf('\\phi = %.2f', vf0_values(j)));
-end
-
-sgtitle('Expected Area vs Effective Permeability for Each Volume Fraction');
+sgtitle('Effective permeability k vs brine volume fraction \phi (one subplot per EPS)');
 function [A_sv, A_sh, vfrac, amean] = gen_pipes(rmu, rsig, nx, ny, h)
     xmin = rmu - 4 * rsig;
     xmax = rmu + 4 * rsig;

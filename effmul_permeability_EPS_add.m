@@ -1,5 +1,4 @@
 clear all; clc; close all;
-t_all = tic;
 %**************************************************************************
 %
 %     Implementation of the network model to compute the effective properties 
@@ -35,12 +34,12 @@ nx = 256; %size of grid nxn power of 2
 ny = nx;
 pdrop = 1.d0; %pressure drop
 vf0 = .05; %targeted volume fraction
-rsig = .5; %variance of lognormal distribution
-trials = 5; %number  of trials
+rsig = .1; %variance of lognormal distribution
+trials = 10; %number  of trials
 ph = 0; %probability of horizontal pipe breaking
 pv = 0; %probability of vertical pipe breaking
-n = 100;%number of deposit steps;
-m = 1;
+n = 10;
+m = 10;
 
 eff_mean_perm_plot = zeros(m, n); % mean effective permeability
 eff_trial_all_perm = zeros(m, n, trials); % all permeability trials
@@ -54,9 +53,12 @@ am0_EPS_mean = zeros(m, n);% Before loops
 
 domain = [0 n];
 
+sv_all = cell(m, n, trials);
+sh_all = cell(m, n, trials);
+
 % Parameter sweeps
-vf0_values = linspace(0.05, .05, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
-EPS_con = linspace(0, 3000, n); % EPS concentration sweep [kg/m^3]
+vf0_values = linspace(0.05, 0.25, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
+EPS_con = linspace(0, 100, n); % EPS concentration sweep [kg/m^3]
 rho_EPS = 1500; % EPS density [kg/m^3]
 for j = 1:m
     vf0_current = vf0_values(j);
@@ -74,48 +76,44 @@ for j = 1:m
         fprintf('Trial %d (base): vfrac=%.5f, amean=%.6e\n', t, vfrac, amean);
 
         % Base volumes (mass = conc * volume)
-        A_sv_acc = A_sv0;
-        A_sh_acc=A_sh0;
-        EPS_prev=0;
+        base_vol_v = sum(A_sv0(:)) * h;   % m^3
+        base_vol_h = sum(A_sh0(:)) * h;   % m^3
 
         for i = 1:n
-            EPS_target = EPS_con(i);
-            dEPS = max(0,EPS_target-EPS_prev);
-            EPS_prev = EPS_target;
+            EPS_concentration = EPS_con(i);
+
                % ---- Start from the SAME base geometry each EPS level ----
-          
+            A_sv = A_sv0;
+            A_sh = A_sh0;
+
+            mass_EPS_v = base_vol_v * EPS_concentration;
+            mass_EPS_h = base_vol_h * EPS_concentration;
      % ---------------- Conductance-weighted EPS deposition ----------------
             % Provisional conductances from current areas (before deposition)
-            sv_temp = (A_sv_acc/pi).^2;
-            sh_temp = (A_sh_acc/pi).^2;
+            sv_temp = (A_sv/pi).^2;
+            sh_temp = (A_sh/pi).^2;
 
-            % % Flow-capacity weights: C ∝ sv_tmp / h  (constants cancel in normalization)
-            W_v = A_sv_acc/sum(A_sv_acc(:));
-            W_h = A_sh_acc/sum(A_sh_acc(:));
-           
+            % Flow-capacity weights: C ∝ sv_tmp / h  (constants cancel in normalization)
+            C_v = sv_temp/h;
+            C_h = sh_temp/h;
+            W_v = C_v / (sum(C_v(:)) + eps);
+            W_h = C_h / (sum(C_h(:)) + eps);
 
-            %current brine volume [m^3]
-            vol_v = sum(A_sv_acc(:))*h;
-            vol_h = sum(A_sh_acc(:))*h;
-            
-            %Incremental EPS mass from a concentration step dEPS [kg/m^3]
-            dmass_EPS_v = vol_v * dEPS;
-            dmass_EPS_h = vol_h * dEPS;
               % Allocate EPS volume per edge: V = (mass / density) * weight
-            Veps_v = (dmass_EPS_v / rho_EPS) * W_v;   % m^3 per edge
-            Veps_h = (dmass_EPS_h / rho_EPS) * W_h;   % m^3 per edge
+            Veps_v = (mass_EPS_v / rho_EPS) * W_v;   % m^3 per edge
+            Veps_h = (mass_EPS_h / rho_EPS) * W_h;   % m^3 per edge
 
               % Convert deposited volume to area decrement: ΔA = V / h
             dA_v = Veps_v / h;   % m^2
             dA_h = Veps_h / h;   % m^2
 
             % Update areas (clip at 0)
-            A_sv_acc = max(0, A_sv_acc - dA_v);
-            A_sh_acc = max(0, A_sh_acc - dA_h);
+            A_sv = max(0, A_sv - dA_v);
+            A_sh = max(0, A_sh - dA_h);
 
             % Conductances after deposition (used in solver)
-            sv = (A_sv_acc/pi).^2; 
-            sh = (A_sh_acc/pi).^2;
+            sv = (A_sv/pi).^2; 
+            sh = (A_sh/pi).^2;
 
         
             % Solve using multigrid (kikmul)
@@ -127,14 +125,13 @@ for j = 1:m
             effright = sum(phi(2, :) .* sh(1, :)) / pdrop / h^2;
             effcoe = (0.5 * (effleft + effright))*(pi/8);
             eff_trial(i) = effcoe;
-            mean_area_single_trial(i) = mean([A_sv_acc(:); A_sh_acc(:)]);
+            mean_area_single_trial(i) = mean([A_sv(:); A_sh(:)]);
                 % Store for later inspection/plots
             sv_all{j,i,t} = sv;
             sh_all{j,i,t} = sh;
 
             % Debug output
-           fprintf('vf0=%.3f | step %2d | dEPS=%.3e kg/m^3 | cumEPS=%.3e | k=%.6e m^2\n', ...
-            vf0_current, i, dEPS, EPS_target, effcoe);
+            fprintf('vf0=%.3e EPS=%.2e Trial=%d effcoe=%.6e\n', vf0_current, EPS_concentration, t, effcoe);
         end
 
         % After finishing all EPS levels for this trial, aggregate:
@@ -161,129 +158,36 @@ sh_final = sh_all{random_j, random_i, random_t};
 % Plotting
 % ----------------------------------------------------
 % --- Separate plots: EPS concentration vs effective permeability (one per vf0) ---
-% ===== SIMPLE EXPONENTIAL DECAY FIT: k(C) = k0 * exp(-a*C) =====
-C = EPS_con(:);                 % EPS concentrations [n x 1]
-K = eff_mean_perm_plot;         % mean permeability per vf0 row [m x n]
-[mRows, nCols] = size(K);
 
-% storage
-k0_hat = zeros(mRows,1);
-a_hat  = zeros(mRows,1);
-R2     = zeros(mRows,1);
-
-% small floor to avoid log(0)
-eps_floor = 1e-18;
-
-for j = 1:mRows
-    k_obs = K(j,:).';
-    valid = isfinite(k_obs) & (k_obs > 0);
-    c = C(valid);
-    y = log(max(k_obs(valid), eps_floor));
-
-    % linear regression: y = b0 + b1 * c
-    p = polyfit(c, y, 1);              % p(1)=b1, p(2)=b0
-    b1 = p(1); b0 = p(2);
-
-    % back to model params
-    k0_hat(j) = exp(b0);
-    a_hat(j)  = -b1;
-
-    % quick R^2 (in log-space)
-    yhat = polyval(p, c);
-    ss_res = sum((y - yhat).^2);
-    ss_tot = sum((y - mean(y)).^2);
-    R2(j) = 1 - ss_res/ss_tot;
-end
-
-GOF = struct('vf0',[],'RMSE',[],'NRMSE_range',[],'NRMSE_std',[],'MAE',[], ...
-             'MSE',[],'NMSE',[],'R2_log',[]);
-
-for j = 1:mRows
-    % observed data for this phi (use only valid positive entries)
-    k_obs = K(j,:).';
-    valid = isfinite(k_obs) & (k_obs > 0);
-    c_obs = C(valid);
-    k_obs = k_obs(valid);
-
-    % model prediction at the *observed* points
-    k_hat = k0_hat(j) * exp(-a_hat(j) * c_obs);
-
-    % --- try toolbox function if available ---
-    try
-        % RMSE normalized by data range (0 = perfect, 1 = as bad as using mean? depends on option)
-        nrmse_range = goodnessOfFit(k_hat, k_obs, 'NRMSE');            % default normalization is by range
-        mse         = goodnessOfFit(k_hat, k_obs, 'MSE');
-        rmse        = sqrt(mse);
-        % If your MATLAB supports these:
-        % mae     = goodnessOfFit(k_hat, k_obs, 'MAE');
-        % nmse    = goodnessOfFit(k_hat, k_obs, 'NMSE');   % normalized MSE by variance
-
-    catch
-        % --- manual fallbacks (no toolbox needed) ---
-        err  = k_hat - k_obs;
-        mse  = mean(err.^2);
-        rmse = sqrt(mse);
-        mae  = mean(abs(err));
-        % NRMSE normalized by data range and by std (two common variants)
-        rng  = max(k_obs) - min(k_obs);  if rng==0, rng = 1; end
-        nrmse_range = rmse / rng;
-        sd   = std(k_obs, 1);            if sd==0, sd = 1; end
-        nrmse_std   = rmse / sd;
-        nmse = mse / (sd^2);
-    end
-
-    % Your log-space R^2 already computed as R2(j). Keep it alongside.
-    GOF(j).vf0          = vf0_values(j);
-    GOF(j).RMSE         = rmse;
-    GOF(j).NRMSE_range  = nrmse_range;
-    GOF(j).NRMSE_std    = exist('nrmse_std','var') * nrmse_std + ~exist('nrmse_std','var') * NaN;
-    GOF(j).MAE          = exist('mae','var') * mae + ~exist('mae','var') * NaN;
-    GOF(j).MSE          = mse;
-    GOF(j).NMSE         = exist('nmse','var') * nmse + ~exist('nmse','var') * NaN;
-    GOF(j).R2_log       = R2(j);   % from your log-space fit
-end
-
-% Pretty table
-vf0_col = [GOF.vf0].';
-RMSE_col = [GOF.RMSE].';
-NRMSEr_col = [GOF.NRMSE_range].';
-NRMSEs_col = [GOF.NRMSE_std].';
-MAE_col = [GOF.MAE].';
-MSE_col = [GOF.MSE].';
-NMSE_col = [GOF.NMSE].';
-R2log_col = [GOF.R2_log].';
-
-GOF_Table = table(vf0_col, RMSE_col, NRMSEr_col, NRMSEs_col, MAE_col, MSE_col, NMSE_col, R2log_col, ...
-    'VariableNames', {'vf0','RMSE','NRMSE_range','NRMSE_std','MAE','MSE','NMSE','R2_log'});
-disp(GOF_Table);
-
-% --- Subplots: EPS vs Effective Permeability with exponential fit overlay ---
+% --- Subplots: EPS vs Effective Permeability for each vf0 ---
 figure;
-rows = ceil(m/3);
-cols = 3;
+rows = ceil(m/3);  % 2 rows if m=5
+cols = 3;          % 3 columns
 
 for j = 1:m
     subplot(rows, cols, j);
-    hold on; grid on;
-    
-    % actual data
-    plot(EPS_con, eff_mean_perm_plot(j,:), 'o-', 'LineWidth', 1.5, ...
-        'DisplayName','data');
-    
-    % fitted exponential curve
-    Cfine = linspace(min(EPS_con), max(EPS_con), 200);
-    Kfit  = k0_hat(j) * exp(-a_hat(j) * Cfine);
-    plot(Cfine, Kfit, 'r--', 'LineWidth', 2, ...
-        'DisplayName', sprintf('fit: k0=%.2e, a=%.3g', k0_hat(j), a_hat(j)));
-    
+    plot(EPS_con, eff_mean_perm_plot(j,:), '-o', 'LineWidth', 2);
     xlabel('EPS Concentration (kg/m^3)');
     ylabel('k (m^2)');
     title(sprintf('vf0 = %.2f', vf0_values(j)));
-    legend('Location','best');
+    grid on;
 end
 
+sgtitle('EPS Concentration vs Effective Permeability for Different vf0');
 
-sgtitle('EPS vs Effective Permeability with Exponential Fit Overlay');
+% --- Subplots: E[A] vs Effective Permeability for each vf0 ---
+figure;
+rows = ceil(m/3);  % make it 2 rows if m=5
+cols = 3;          % 3 columns
+for j = 1:m
+    subplot(rows, cols, j);
+    plot(mean_area_plot(j,:), eff_mean_perm_plot(j,:), '-o', 'LineWidth', 2);
+    xlabel('E[A] (m^2)');
+    ylabel('k (m^2)');
+    title(sprintf('vf0 = %.2f', vf0_values(j)));
+    grid on;
+end
+
 % --- Subplots: EPS concentration vs Expected Area for each vf0 ---
 figure;
 rows = ceil(m/3);  % 2 rows if m=5
@@ -388,25 +292,7 @@ for i = 1:n_eps
     title(sprintf('EPS = %.3g kg m^{-3}', EPS_con(i)));
 end
 
-% --- Subplots: Expected Area vs Effective Permeability (one panel per vf0) ---
-figure;
-rows = ceil(m/3);
-cols = 3;
-
-for j = 1:m
-    subplot(rows, cols, j);
-    hold on; grid on;
-    
-    % plot mean area vs permeability for this φ
-    plot(mean_area_plot(j,:), eff_mean_perm_plot(j,:), 'o-', 'LineWidth', 1.5);
-    
-    set(gca, 'YScale','log'); % permeability usually log scale
-    xlabel('E[A] (m^2)');
-    ylabel('k (m^2)');
-    title(sprintf('\\phi = %.2f', vf0_values(j)));
-end
-
-sgtitle('Expected Area vs Effective Permeability for Each Volume Fraction');
+sgtitle('Effective permeability k vs brine volume fraction \phi (one subplot per EPS)');
 function [A_sv, A_sh, vfrac, amean] = gen_pipes(rmu, rsig, nx, ny, h)
     xmin = rmu - 4 * rsig;
     xmax = rmu + 4 * rsig;
@@ -425,7 +311,7 @@ function [A_sv, A_sh, vfrac, amean] = gen_pipes(rmu, rsig, nx, ny, h)
     % % Apply random pipe failures (broken ducts)
     % broken_h = rand(nx + 1, ny + 1) <= ph;  % horizontal breakage
     % broken_v = rand(nx + 1, ny + 1) <= pv;  % vertical breakage
-
+    % 
     % sh(broken_h) = 0;
     % sv(broken_v) = 0;
 
@@ -434,4 +320,3 @@ function [A_sv, A_sh, vfrac, amean] = gen_pipes(rmu, rsig, nx, ny, h)
     amean = 0.5 * asum / ((nx + 1) * (ny + 1));
     vfrac = asum / ((nx + 1) * (ny + 1)) / h^2;
 end
-fprintf('Total time elapsed: %.2f s\n', toc(t_all));
