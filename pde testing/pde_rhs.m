@@ -2,9 +2,11 @@ function dydt = pde_rhs(~,y,param)
 N_B = param.N_B;
 N_E = param.N_E;
 N_x = param.N_x;
+
 n_pipes = param.n_pipes;
 n_cols=param.n_cols;
 n_pipes_per_col=param.n_pipes_per_col;
+
 D_B = param.D_B;
 D_E = param.D_E;
 lambda = param.lambda;
@@ -28,6 +30,7 @@ for c = 1:n_cols
     local_blocks = cell(2*n_pipes_per_col,1);
     prev_pipe_outlet_B = [];
     prev_pipe_outlet_E = [];
+
     for q =1:n_pipes_per_col
         p = (c-1)*n_pipes_per_col+q;
         drB = dr_B(p);
@@ -56,8 +59,11 @@ for c = 1:n_cols
             B(:,1) = param.C_in;
             E(:,1) = 0;
         else
+            % Exact pipe-to-pipe boundary matching.
+            % Pipe q inlet equals pipe q-1 outlet.
             B(:,1) = prev_pipe_outlet_B;
             E(:,1) = prev_pipe_outlet_E;
+
         end
     
        if q == n_pipes_per_col
@@ -80,26 +86,24 @@ for c = 1:n_cols
     
         
         % Interface reconstruction at r = a(p)
-        for k = 2:N_x-1
+        for k = 1:N_x
+
             B(N_B,k) = (D_B*drE*B(N_B-1,k) + D_E*drB*E(2,k)) ...
                      / (D_B*drE + D_E*drB);
+
             E(1,k) = B(N_B,k);
+
         end
-            B(N_B,1) = B(N_B,2);
-     % Boundary interface values
-        B(N_B,1) = (D_B*drE*B(N_B-1,1) + D_E*drB*E(2,1)) ...
-                 / (D_B*drE + D_E*drB);
-    
-        B(N_B,N_x) = (D_B*drE*B(N_B-1,N_x) + D_E*drB*E(2,N_x)) ...
-                   / (D_B*drE + D_E*drB);
-    
-        E(1,1)   = B(N_B,1);
-        E(1,N_x) = B(N_B,N_x);
-    
+
+        % Save outlet of this pipe for next pipe
         % Save outlet of this pipe for next pipe
         if q < n_pipes_per_col
             prev_pipe_outlet_B = B(:,N_x);
             prev_pipe_outlet_E = E(:,N_x);
+        
+            % Also save the radial grids for interpolation into the next pipe
+            prev_rB_out = rB;
+            prev_rE_out = rE;
         end
     
     
@@ -162,3 +166,4 @@ for c = 1:n_cols
 end
 
 dydt = vertcat(dydt_col_blocks{:});
+end

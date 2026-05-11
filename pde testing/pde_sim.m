@@ -9,20 +9,44 @@ mu_fluid = 1.8e-3;   % viscosity [Pa*s]
 
 N_B = 10;     % number of brine radial nodes
 N_E = 10;     % number of EPS radial nodes
-N_x = 10;     % number of axial nodes
+N_x = 25;     % number of axial nodes
 
 vf0_current = .25;
 sigma_A = .5;
-am0 = pi*(7.d-5 + 1.6e-4*vf0_current)^2; %[m^2]
+
+am0 = pi*(7.e-5 + 1.6e-4*vf0_current)^2; %[m^2]
 mu_A = log(am0)-.5*sigma_A^2;
 
-n_cols = 20; %number of column
-n_pipes_per_col=10; %number of pipes per column
+n_cols = 5; %number of column
+n_pipes_per_col=5; %number of pipes per column
 n_pipes = n_cols*n_pipes_per_col; %total number of pipes
-A = (exp(mu_A+sigma_A*randn(1,n_pipes)))'; %logN cross sectional area
+
+A = (exp(mu_A+sigma_A*randn(1,n_pipes)))'; %initial total pipe are
 a = sqrt(A/pi);  %lognormal distribution of radius of pipes
-R = a + 2e-5;
 L   = sqrt((2 * am0) / vf0_current);
+dEPS_pde=500;
+rho_EPS = 1500;
+A_EPS = zeros(size(A));
+ % Larger brine pipes receive more EPS
+        W_v = A / sum(A(:));
+
+        % Total brine volume across all pipes
+        vol_v = sum(A(:)) * L;
+
+        % Incremental EPS mass
+        dmass_EPS_v = vol_v * dEPS_pde;
+
+        % Convert EPS mass to EPS volume and distribute
+        Veps_v = (dmass_EPS_v / rho_EPS) * W_v;
+
+        % Convert deposited EPS volume to added EPS cross-sectional area
+        dA_EPS = Veps_v / L;
+
+        % EPS grows outward
+        A_EPS = A_EPS + dA_EPS;
+
+R = sqrt((A+A_EPS)/pi);
+
 
 % =========================================================
 % BUILD RADIAL GRIDS AND PRESSURE-DRIVEN VELOCITY PROFILES
@@ -44,6 +68,7 @@ p_drop = 1;  % [Pa]
 
 u_max_pipe = zeros(n_pipes,1);
 Q_col = zeros(n_cols,1);
+R_col_all = zeros(n_cols,1);
 
 % ---------------------------------------------------------
 % Each column is a stack of pipes in series.
@@ -136,15 +161,45 @@ n_E = (N_E-1)*(N_x-2);
 % Stack into one long vector
 y0 = zeros(n_pipes*(n_B+n_E),1);
 
-tspan = linspace(0,5000,50);
+tspan = linspace(0,5000,15);
 steady_tol = 1e-6;
-n_pipe_state = n_B +n_E;
-n_col_state = n_pipes_per_col*n_pipe_state;
 
-J_col = spones(sparse(ones(n_col_state,n_col_state)));
+n_pipe_state = n_B + n_E;
+n_col_state  = n_pipes_per_col*n_pipe_state;
+
+% ---------------------------------------------------------
+% Faster Jacobian sparsity pattern
+% Each pipe depends mostly on itself.
+% Pipe q also depends on pipe q-1 through the inlet boundary.
+% This is much sparser than making the whole column dense.
+% ---------------------------------------------------------
+J_col = sparse(n_col_state,n_col_state);
+
+Ppipe = spones(sparse(ones(n_pipe_state,n_pipe_state)));
+
+for q = 1:n_pipes_per_col
+
+    idx_q = (q-1)*n_pipe_state + (1:n_pipe_state);
+
+    % Pipe q depends on itself
+    J_col(idx_q,idx_q) = Ppipe;
+
+    % Pipe q depends on previous pipe through boundary condition
+    if q > 1
+        idx_prev = (q-2)*n_pipe_state + (1:n_pipe_state);
+        J_col(idx_q,idx_prev) = Ppipe;
+    end
+
+end
+
+% Columns are independent, so use block diagonal structure
 J_pat = kron(speye(n_cols),J_col);
 
-opts = odeset('RelTol',1e-4,'AbsTol',1e-6, 'JPattern',J_pat,'Events', @(t,y) steady_state_event(t,y,params,steady_tol));
+opts = odeset( ...
+    'RelTol',1e-4, ...
+    'AbsTol',1e-6, ...
+    'JPattern',J_pat, ...
+    'Events', @(t,y) steady_state_event(t,y,params,steady_tol));
 tic
 [t,y,te,ye,ie] = ode15s(@(t,y) pde_rhs(t,y,params), tspan, y0, opts);
 toc
@@ -160,7 +215,45 @@ end
 dydt_final = pde_rhs(t(end), y(end,:)', params);
 fprintf('Final ||dy/dt||_inf = %.6e\n', norm(dydt_final, inf));
 y_m = y(end,:)';
+% Save PDE geometry before permeability sweep changes L
+L_pde = params.L;
+Delta_x_pde = params.Delta_x;
+x_local_pde = linspace(0,L_pde,N_x);
+fprintf('\n--- Exact boundary check from plotting reconstruction ---\n');
 
+for c = 1:n_cols
+
+    prev_out = [];
+
+    for q = 1:n_pipes_per_col
+
+        p = (c-1)*n_pipes_per_col + q;
+
+        offset = (p-1)*(n_B+n_E);
+
+        B_stored = reshape(y_m(offset + (1:n_B)), N_B-1, N_x-2);
+        E_stored = reshape(y_m(offset + n_B + (1:n_E)), N_E-1, N_x-2);
+
+        drB = Delta_r_B(p);
+        drE = Delta_r_E(p);
+
+        outF = build_display_field_full_direct(B_stored, E_stored, ...
+            r_B(:,p), r_E(:,p), a(p), R(p), [], ...
+            D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+            prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
+
+        if q > 1
+            B_jump = max(abs(outF.B_full(:,1) - prev_out.B_out));
+            E_jump = max(abs(outF.E_full(:,1) - prev_out.E_out));
+
+            fprintf('Column %d, pipe %d -> %d: max B boundary jump = %.3e, max E boundary jump = %.3e\n', ...
+                c, q-1, q, B_jump, E_jump);
+        end
+
+        prev_out = outF;
+
+    end
+end
 % =========================================================
 % PERMEABILITY CHANGE USING EPS-LAYER CONCENTRATION PROXY
 % =========================================================
@@ -422,41 +515,65 @@ for j = 1:m
 end
 
 sgtitle('Expected area vs effective permeability for each volume fraction');
-height_stretch=1;
+height_stretch = 1;
 % =========================================================
 % EPS AVERAGE PLOT BY COLUMN
+% Smooth visualization only: does not change the PDE solution
 % =========================================================
+
 figure('Position',[100 100 900 600]);
 hold on
+
+n_plot_dense = 800;   % increase for smoother-looking curves
 
 for c = 1:n_cols
 
     x_all = [];
     E_all = [];
 
+    prev_out = [];
+
     for q = 1:n_pipes_per_col
 
-        % Global pipe index
         p = (c-1)*n_pipes_per_col + q;
 
         offset = (p-1)*(n_B+n_E);
 
-        % Extract stored solution for this pipe
         B_stored = reshape(y_m(offset + (1:n_B)), N_B-1, N_x-2);
         E_stored = reshape(y_m(offset + n_B + (1:n_E)), N_E-1, N_x-2);
 
-        % Vertical coordinate inside this column
-        x_plot = x_local(2:N_x-1) + (q-1)*(L - 2*Delta_x);
+        drB = Delta_r_B(p);
+        drE = Delta_r_E(p);
 
-        % Average nutrient in EPS across EPS thickness
-        E_avg_x = mean(E_stored, 1);
+        outF = build_display_field_full_direct(B_stored, E_stored, ...
+            r_B(:,p), r_E(:,p), a(p), R(p), [], ...
+            D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+            prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
 
-        x_all = [x_all, x_plot];
-        E_all = [E_all, E_avg_x];
+        % Average over EPS layer only, excluding interface row
+        E_avg_full = mean(outF.E_full(2:end,:), 1);
+
+        x_pipe = x_local_pde + (q-1)*L_pde;
+
+        % Keep all points so pipe boundaries are represented
+        x_all = [x_all, x_pipe];
+        E_all = [E_all, E_avg_full];
+
+        prev_out = outF;
 
     end
 
-    plot(x_all, E_all, 'LineWidth', 2, ...
+    % Remove duplicated x-values before interpolation
+    [x_unique, ia] = unique(x_all, 'stable');
+    E_unique = E_all(ia);
+
+    % Dense smooth-looking plotting grid
+    x_dense = linspace(min(x_unique), max(x_unique), n_plot_dense);
+
+    % Shape-preserving interpolation for visualization
+    E_dense = interp1(x_unique, E_unique, x_dense, 'pchip');
+
+    plot(x_dense, E_dense, 'LineWidth', 2, ...
         'DisplayName', sprintf('Column %d', c));
 
 end
@@ -468,112 +585,29 @@ legend('Location','best');
 grid on
 hold off
 
+
 % =========================================================
 % EPS AVERAGE: EACH COLUMN + AVERAGE OVER ALL COLUMNS
+% Smooth visualization only: does not change the PDE solution
 % =========================================================
 
 figure('Position',[100 100 900 600]);
 hold on
 
-E_by_col_full = zeros(n_cols, n_pipes_per_col*(N_x-2));
-x_full = [];
+n_plot_dense = 800;
 
-% Build common vertical coordinate
-for q = 1:n_pipes_per_col
-    x_plot = x_local(2:N_x-1) + (q-1)*(L - 2*Delta_x);
-    x_full = [x_full, x_plot];
-end
+x_dense_common = linspace(0, n_pipes_per_col*L_pde, n_plot_dense);
+E_by_col_dense = zeros(n_cols, n_plot_dense);
 
 for c = 1:n_cols
 
-    E_col_full = [];
+    x_all = [];
+    E_all = [];
+
+    prev_out = [];
 
     for q = 1:n_pipes_per_col
 
-        p = (c-1)*n_pipes_per_col + q;
-
-        offset = (p-1)*(n_B+n_E);
-
-        E_stored = reshape(y_m(offset + n_B + (1:n_E)), N_E-1, N_x-2);
-
-        E_avg_x = mean(E_stored, 1);
-
-        E_col_full = [E_col_full, E_avg_x];
-
-    end
-
-    E_by_col_full(c,:) = E_col_full;
-
-    plot(x_full, E_col_full, '--', 'LineWidth', 1.2, ...
-        'DisplayName', sprintf('Column %d', c));
-
-end
-
-E_mean_all_cols = mean(E_by_col_full, 1);
-
-plot(x_full, E_mean_all_cols, 'k-', 'LineWidth', 3, ...
-    'DisplayName', 'Average over all columns');
-
-xlabel('Vertical distance, x');
-ylabel('Average nutrient in EPS');
-title('Average EPS nutrient concentration over all columns');
-legend('Location','best');
-grid on
-hold off
-% =========================================================
-% MULTIPLE COLUMN FINAL PLOT
-% =========================================================
-figure('Position',[100 100 650 1000]);
-hold on
-
-cmin = inf;
-cmax = -inf;
-
-Rmax = max(R);
-Nr_plot = 30;
-r_plot = linspace(-Rmax, Rmax, Nr_plot);
-
-% Horizontal spacing between columns
-col_spacing = 3.0*Rmax;
-
-% ---------------------------------------------------------
-% Fast color limits: use final time only
-% ---------------------------------------------------------
-cmin_t = inf;
-cmax_t = -inf;
-
-y_n = y(end,:)';
-
-for p = 1:n_pipes
-
-    offset = (p-1)*(n_B+n_E);
-
-    B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
-    E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
-
-    drB = Delta_r_B(p);
-    drE = Delta_r_E(p);
-
-    B_interface = (D_B*drE*B_stored(end,:) + D_E*drB*E_stored(1,:)) ...
-                / (D_B*drE + D_E*drB);
-
-    F = build_display_field(B_stored, E_stored, B_interface, ...
-        r_B(:,p), r_E(:,p), a(p), R(p), r_plot);
-
-    cmin_t = min(cmin_t, min(F(:), [], 'omitnan'));
-    cmax_t = max(cmax_t, max(F(:), [], 'omitnan'));
-
-end
-% ---------------------------------------------------------
-% Plot each column side-by-side
-% ---------------------------------------------------------
-for c = 1:n_cols
-
-    x_shift = (c-1)*col_spacing;
-
-    for q = 1:n_pipes_per_col
-
-        % Global pipe index
         p = (c-1)*n_pipes_per_col + q;
 
         offset = (p-1)*(n_B+n_E);
@@ -584,54 +618,174 @@ for c = 1:n_cols
         drB = Delta_r_B(p);
         drE = Delta_r_E(p);
 
-        B_interface = (D_B*drE*B_stored(end,:) + D_E*drB*E_stored(1,:)) ...
-                    / (D_B*drE + D_E*drB);
+        outF = build_display_field_full_direct(B_stored, E_stored, ...
+            r_B(:,p), r_E(:,p), a(p), R(p), [], ...
+            D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+            prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
 
-        F = build_display_field(B_stored,E_stored,B_interface, ...
-            r_B(:,p),r_E(:,p),a(p),R(p),r_plot);
+        % Average over EPS layer only, excluding interface row
+        E_avg_full = mean(outF.E_full(2:end,:), 1);
 
-        % Vertical position inside the column
-        y_plot = height_stretch*(x_local(2:N_x-1) + (q-1)*(L - 2*Delta_x));
+        x_pipe = x_local_pde + (q-1)*L_pde;
 
-        % Horizontal shift for this column
-        r_plot_shifted = r_plot + x_shift;
+        x_all = [x_all, x_pipe];
+        E_all = [E_all, E_avg_full];
 
-        imagesc(r_plot_shifted, y_plot, F);
-
-        % Interface lines
-        plot(x_shift + [ a(p)  a(p)], [y_plot(1) y_plot(end)], ...
-            'w--', 'LineWidth', 1.5);
-
-        plot(x_shift + [-a(p) -a(p)], [y_plot(1) y_plot(end)], ...
-            'w--', 'LineWidth', 1.5);
-
-        % Outer EPS wall lines
-        plot(x_shift + [ R(p)  R(p)], [y_plot(1) y_plot(end)], ...
-            'k-', 'LineWidth', 1.5);
-
-        plot(x_shift + [-R(p) -R(p)], [y_plot(1) y_plot(end)], ...
-            'k-', 'LineWidth', 1.5);
+        prev_out = outF;
 
     end
 
-    % Label each column
-    text(x_shift, -0.08*n_pipes_per_col*L, sprintf('Column %d', c), ...
+    % Remove repeated interface locations
+    [x_unique, ia] = unique(x_all, 'stable');
+    E_unique = E_all(ia);
+
+    % Interpolate onto common plotting grid
+    E_dense = interp1(x_unique, E_unique, x_dense_common, 'pchip', 'extrap');
+
+    E_by_col_dense(c,:) = E_dense;
+
+    plot(x_dense_common, E_dense, '--', 'LineWidth', 1.2, ...
+        'DisplayName', sprintf('Column %d', c));
+
+end
+
+E_mean_all_cols = mean(E_by_col_dense, 1);
+
+plot(x_dense_common, E_mean_all_cols, 'k-', 'LineWidth', 3, ...
+    'DisplayName', 'Average over all columns');
+
+xlabel('Vertical distance, x');
+ylabel('Average nutrient in EPS');
+title('Average EPS nutrient concentration over all columns');
+legend('Location','best');
+grid on
+hold off
+% =========================================================
+% MULTIPLE COLUMN FINAL PLOT
+% Build one full image per column to avoid visual jumps
+% =========================================================
+
+figure('Position',[100 100 650 1000]);
+hold on
+
+Rmax = max(R);
+Nr_plot = 120;
+r_plot = linspace(-Rmax, Rmax, Nr_plot);
+
+col_spacing = 3.0*Rmax;
+
+y_n = y(end,:)';
+
+% Full vertical grid for one column
+y_full = [];
+for q = 1:n_pipes_per_col
+    y_pipe = x_local_pde + (q-1)*L_pde;
+
+    if q == 1
+        y_full = [y_full, y_pipe];
+    else
+        y_full = [y_full, y_pipe(2:end)];
+    end
+end
+
+% ---------------------------------------------------------
+% First pass: build all column fields and color limits
+% ---------------------------------------------------------
+F_cols = cell(n_cols,1);
+cmin_t = inf;
+cmax_t = -inf;
+
+for c = 1:n_cols
+
+    prev_out = [];
+    F_col = [];
+
+    for q = 1:n_pipes_per_col
+
+        p = (c-1)*n_pipes_per_col + q;
+
+        offset = (p-1)*(n_B+n_E);
+
+        B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
+        E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
+
+        drB = Delta_r_B(p);
+        drE = Delta_r_E(p);
+
+        outF = build_display_field_full_direct(B_stored, E_stored, ...
+            r_B(:,p), r_E(:,p), a(p), R(p), r_plot, ...
+            D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+            prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
+
+        F = outF.field;
+
+        % Avoid duplicate shared boundary rows
+        if q == 1
+            F_col = [F_col; F];
+        else
+            F_col = [F_col; F(2:end,:)];
+        end
+
+        prev_out = outF;
+
+    end
+
+    F_cols{c} = F_col;
+
+    cmin_t = min(cmin_t, min(F_col(:), [], 'omitnan'));
+    cmax_t = max(cmax_t, max(F_col(:), [], 'omitnan'));
+
+end
+
+% ---------------------------------------------------------
+% Second pass: plot each full column as one image
+% ---------------------------------------------------------
+for c = 1:n_cols
+
+    x_shift = (c-1)*col_spacing;
+
+    F_col = F_cols{c};
+    r_plot_shifted = r_plot + x_shift;
+
+    imagesc(r_plot_shifted, height_stretch*y_full, F_col);
+    set(gca,'YDir','normal');
+
+    % Optional smoothing for display only
+    shading interp
+
+    % Draw pipe walls/interface lines pipe by pipe
+    for q = 1:n_pipes_per_col
+
+        p = (c-1)*n_pipes_per_col + q;
+
+        y0 = height_stretch*((q-1)*L_pde);
+        y1 = height_stretch*(q*L_pde);
+
+        % Brine/EPS interface
+        plot(x_shift + [ a(p)  a(p)], [y0 y1], 'w--', 'LineWidth', 1.5);
+        plot(x_shift + [-a(p) -a(p)], [y0 y1], 'w--', 'LineWidth', 1.5);
+
+        % Outer EPS wall
+        plot(x_shift + [ R(p)  R(p)], [y0 y1], 'k-', 'LineWidth', 1.5);
+        plot(x_shift + [-R(p) -R(p)], [y0 y1], 'k-', 'LineWidth', 1.5);
+
+    end
+
+    text(x_shift, -0.08*n_pipes_per_col*L_pde, sprintf('Column %d', c), ...
         'HorizontalAlignment','center', ...
         'FontWeight','bold');
 
 end
 
-set(gca,'YDir','normal');
 axis tight
-
 xlim([-Rmax, (n_cols-1)*col_spacing + Rmax]);
-ylim(height_stretch*[x_local(2), x_local(end-1) + (n_pipes_per_col-1)*(L - 2*Delta_x)]);
+ylim(height_stretch*[0, n_pipes_per_col*L_pde]);
 
-if isfinite(cmin) && isfinite(cmax)
-    if cmax > cmin
-        caxis([cmin cmax]);
+if isfinite(cmin_t) && isfinite(cmax_t)
+    if cmax_t > cmin_t
+        caxis([cmin_t cmax_t]);
     else
-        caxis([cmin cmin + 1e-12]);
+        caxis([cmin_t cmin_t + 1e-12]);
     end
 end
 
@@ -642,19 +796,15 @@ colorbar
 hold off
 
 % =========================================================
-% STACKED TIME ANIMATION ONLY
+% MULTIPLE COLUMN TIME ANIMATION
+% Image plot skips duplicated interface row to avoid overplotting.
 % =========================================================
+
 figure('Position',[100 100 650 1000]);
 
 v = VideoWriter('nutrient_stacked_pipes.mp4', 'MPEG-4');
 v.FrameRate = 1;
 open(v);
-colorbar
-% =========================================================
-% MULTIPLE COLUMN TIME ANIMATION
-% =========================================================
-cmin_t = inf;
-cmax_t = -inf;
 
 Rmax = max(R);
 Nr_plot = 60;
@@ -662,66 +812,22 @@ r_plot = linspace(-Rmax, Rmax, Nr_plot);
 
 col_spacing = 3.0*Rmax;
 
+cmin_t = inf;
+cmax_t = -inf;
+
 % ---------------------------------------------------------
-% Get common color limits over all times and pipes
+% Get common color limits over all times
 % ---------------------------------------------------------
 for n = 1:length(t)
 
     y_n = y(n,:)';
 
-    for p = 1:n_pipes
-
-        offset = (p-1)*(n_B+n_E);
-
-        B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
-        E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
-
-        drB = Delta_r_B(p);
-        drE = Delta_r_E(p);
-
-        B_interface = (D_B*drE*B_stored(end,:) + D_E*drB*E_stored(1,:)) ...
-                    / (D_B*drE + D_E*drB);
-
-        F = build_display_field(B_stored, E_stored, B_interface, ...
-            r_B(:,p), r_E(:,p), a(p), R(p), r_plot);
-
-        cmin_t = min(cmin_t, min(F(:), [], 'omitnan'));
-        cmax_t = max(cmax_t, max(F(:), [], 'omitnan'));
-
-    end
-end
-
-% ---------------------------------------------------------
-% Make animation
-% ---------------------------------------------------------
-
-video_dt = 10;  % show one frame every 5 simulation seconds
-
-frame_times = 0:video_dt:t(end);
-frame_idx = zeros(size(frame_times));
-
-for k = 1:length(frame_times)
-    [~, frame_idx(k)] = min(abs(t - frame_times(k)));
-end
-
-frame_idx = unique(frame_idx);
-
-for kk = 1:length(frame_idx)
-
-    n = frame_idx(kk);
-
-    clf
-    set(gcf,'Position',[100 100 650 1000])
-    hold on
-
-    y_n = y(n,:)';
     for c = 1:n_cols
 
-        x_shift = (c-1)*col_spacing;
+        prev_out = [];
 
         for q = 1:n_pipes_per_col
 
-            % Global pipe index
             p = (c-1)*n_pipes_per_col + q;
 
             offset = (p-1)*(n_B+n_E);
@@ -732,37 +838,104 @@ for kk = 1:length(frame_idx)
             drB = Delta_r_B(p);
             drE = Delta_r_E(p);
 
-            B_interface = (D_B*drE*B_stored(end,:) + D_E*drB*E_stored(1,:)) ...
-                        / (D_B*drE + D_E*drB);
+            outF = build_display_field_full_direct(B_stored, E_stored, ...
+                r_B(:,p), r_E(:,p), a(p), R(p), r_plot, ...
+                D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+                prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
 
-            F = build_display_field(B_stored, E_stored, B_interface, ...
-                r_B(:,p), r_E(:,p), a(p), R(p), r_plot);
+            F = outF.field;
 
-            % Vertical position inside each column
-            y_plot = height_stretch*(x_local(2:N_x-1) + (q-1)*(L - 2*Delta_x));
+            cmin_t = min(cmin_t, min(F(:), [], 'omitnan'));
+            cmax_t = max(cmax_t, max(F(:), [], 'omitnan'));
 
-            % Horizontal shift for each column
+            prev_out = outF;
+
+        end
+    end
+end
+
+% ---------------------------------------------------------
+% Choose frame times
+% ---------------------------------------------------------
+video_dt = 10;
+
+frame_times = 0:video_dt:t(end);
+frame_idx = zeros(size(frame_times));
+
+for k = 1:length(frame_times)
+    [~, frame_idx(k)] = min(abs(t - frame_times(k)));
+end
+
+frame_idx = unique(frame_idx);
+
+% ---------------------------------------------------------
+% Make animation
+% ---------------------------------------------------------
+for kk = 1:length(frame_idx)
+
+    n = frame_idx(kk);
+
+    clf
+    set(gcf,'Position',[100 100 650 1000])
+    hold on
+
+    y_n = y(n,:)';
+
+    for c = 1:n_cols
+
+        x_shift = (c-1)*col_spacing;
+
+        prev_out = [];
+
+        for q = 1:n_pipes_per_col
+
+            p = (c-1)*n_pipes_per_col + q;
+
+            offset = (p-1)*(n_B+n_E);
+
+            B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
+            E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
+
+            drB = Delta_r_B(p);
+            drE = Delta_r_E(p);
+
+            outF = build_display_field_full_direct(B_stored, E_stored, ...
+                r_B(:,p), r_E(:,p), a(p), R(p), r_plot, ...
+                D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+                prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
+
+            F = outF.field;
+
+            if q == 1
+                F_plot = F;
+                y_plot = height_stretch*(x_local_pde + (q-1)*L_pde);
+            else
+                F_plot = F(2:end,:);
+                y_plot = height_stretch*(x_local_pde(2:end) + (q-1)*L_pde);
+            end
+
             r_plot_shifted = r_plot + x_shift;
 
-            imagesc(r_plot_shifted, y_plot, F);
+            imagesc(r_plot_shifted, y_plot, F_plot);
+            shading interp
 
-            % Interface lines
             plot(x_shift + [ a(p)  a(p)], [y_plot(1) y_plot(end)], ...
                 'w--', 'LineWidth', 1.5);
 
             plot(x_shift + [-a(p) -a(p)], [y_plot(1) y_plot(end)], ...
                 'w--', 'LineWidth', 1.5);
 
-            % Outer EPS wall lines
             plot(x_shift + [ R(p)  R(p)], [y_plot(1) y_plot(end)], ...
                 'k-', 'LineWidth', 1.5);
 
             plot(x_shift + [-R(p) -R(p)], [y_plot(1) y_plot(end)], ...
                 'k-', 'LineWidth', 1.5);
 
+            prev_out = outF;
+
         end
 
-        text(x_shift, -0.08*n_pipes_per_col*L, sprintf('Column %d', c), ...
+        text(x_shift, -0.08*n_pipes_per_col*L_pde, sprintf('Column %d', c), ...
             'HorizontalAlignment','center', ...
             'FontWeight','bold');
 
@@ -772,7 +945,7 @@ for kk = 1:length(frame_idx)
     axis tight
 
     xlim([-Rmax, (n_cols-1)*col_spacing + Rmax]);
-    ylim(height_stretch*[x_local(2), x_local(end-1) + (n_pipes_per_col-1)*(L - 2*Delta_x)]);
+    ylim(height_stretch*[0, n_pipes_per_col*L_pde]);
 
     if isfinite(cmin_t) && isfinite(cmax_t)
         if cmax_t > cmin_t
@@ -791,44 +964,125 @@ for kk = 1:length(frame_idx)
     h.Units = 'normalized';
     h.Position(2) = 1.05;
 
-    
-  colorbar
-hold off
-drawnow
+    colorbar
+    hold off
+    drawnow
 
-frame = getframe(gcf);
-writeVideo(v, frame);
+    frame = getframe(gcf);
+    writeVideo(v, frame);
+
 end
+
 close(v);
-% =========================================================
-% Local function
-% =========================================================
-function F = build_display_field(B_stored,E_stored,B_interface,rB,rE,a_val,R_val,r_plot)
 
-    Nx_int = size(B_stored,2);
+function out = build_display_field_full_direct(B_stored,E_stored,rB,rE,a_val,R_val,r_plot, ...
+    D_B,D_E,drB,drE,q,n_pipes_per_col,prev_out,C_in,JB_out,JE_out,dx)
+
+    N_B = length(rB);
+    N_E = length(rE);
+    N_x = size(B_stored,2) + 2;
+
+    B = zeros(N_B,N_x);
+    E = zeros(N_E,N_x);
+
+    B(1:N_B-1,2:N_x-1) = B_stored;
+    E(2:N_E,2:N_x-1)   = E_stored;
+
+    % -----------------------------------------------------
+    % Left boundary
+    % -----------------------------------------------------
+    if q == 1
+
+        B(:,1) = C_in;
+        E(:,1) = 0;
+
+    else
+
+        % Direct node-by-node matching with previous outlet.
+        % This matches your current pde_rhs choice.
+        B(:,1) = prev_out.B_out;
+        E(:,1) = prev_out.E_out;
+
+    end
+
+    % -----------------------------------------------------
+    % Right boundary
+    % -----------------------------------------------------
+    if q == n_pipes_per_col
+
+        qB = -JB_out / D_B;
+        qE = -JE_out / D_E;
+
+        B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1) + qB*dx;
+        E(2:N_E,N_x)   = E(2:N_E,N_x-1)   + qE*dx;
+
+    else
+
+        B(1:N_B-1,N_x) = B(1:N_B-1,N_x-1);
+        E(2:N_E,N_x)   = E(2:N_E,N_x-1);
+
+    end
+
+    % -----------------------------------------------------
+    % Interface reconstruction
+    % -----------------------------------------------------
+    for k = 1:N_x
+
+        B(N_B,k) = (D_B*drE*B(N_B-1,k) + D_E*drB*E(2,k)) ...
+                 / (D_B*drE + D_E*drB);
+
+        E(1,k) = B(N_B,k);
+
+    end
+
+    % -----------------------------------------------------
+    % If no display field was requested, return only B/E.
+    % -----------------------------------------------------
+    if isempty(r_plot)
+
+        out.field = [];
+        out.B_out = B(:,N_x);
+        out.E_out = E(:,N_x);
+        out.B_full = B;
+        out.E_full = E;
+        return
+
+    end
+
+    % -----------------------------------------------------
+    % Build display field
+    % -----------------------------------------------------
     Nr_plot = numel(r_plot);
-
-    B_prof = [B_stored; B_interface];
-    E_prof = [B_interface; E_stored];
-
-    F = nan(Nx_int, Nr_plot);
+    F = nan(N_x, Nr_plot);
 
     rr = abs(r_plot);
+
     brine_mask = rr <= a_val;
     eps_mask   = (rr > a_val) & (rr <= R_val);
 
     rr_brine = rr(brine_mask);
     rr_eps   = rr(eps_mask);
 
-    for k = 1:Nx_int
+    for k = 1:N_x
+
         if ~isempty(rr_brine)
-            F(k,brine_mask) = interp1(rB, B_prof(:,k), rr_brine, 'linear', 'extrap');
+            F(k,brine_mask) = interp1(rB, B(:,k), rr_brine, ...
+                                      'linear', 'extrap');
         end
+
         if ~isempty(rr_eps)
-            % for debugging: only use EPS data itself
-            F(k,eps_mask) = interp1(rE(2:end), E_stored(:,k), rr_eps, 'nearest', 'extrap');
+            F(k,eps_mask) = interp1(rE, E(:,k), rr_eps, ...
+                                    'nearest', 'extrap');
         end
+
     end
+
+    out.field = F;
+    out.B_out = B(:,N_x);
+    out.E_out = E(:,N_x);
+    out.B_full = B;
+    out.E_full = E;
+
 end
 function [value,isterminal,direction] = steady_state_event(t,y,params,steady_tol)
 
