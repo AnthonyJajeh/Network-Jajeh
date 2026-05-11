@@ -101,9 +101,7 @@ for c = 1:n_cols
             prev_pipe_outlet_B = B(:,N_x);
             prev_pipe_outlet_E = E(:,N_x);
         
-            % Also save the radial grids for interpolation into the next pipe
-            prev_rB_out = rB;
-            prev_rE_out = rE;
+           
         end
     
     

@@ -807,7 +807,7 @@ v.FrameRate = 1;
 open(v);
 
 Rmax = max(R);
-Nr_plot = 60;
+Nr_plot = 120;
 r_plot = linspace(-Rmax, Rmax, Nr_plot);
 
 col_spacing = 3.0*Rmax;
