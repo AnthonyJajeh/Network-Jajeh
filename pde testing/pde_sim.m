@@ -1,15 +1,18 @@
 clear; clc; close all
 
 % Parameters
+EPS_sweep = linspace(0,1500,10);
+n_sweep = length(EPS_sweep);
+avg_nutrient_EPS_sweep = zeros(n_sweep,1);
 
 D_B = 1e-9;
 D_E = 1e-10;
 lambda = 1;
 mu_fluid = 1.8e-3;   % viscosity [Pa*s]
 
-N_B = 20;     % number of brine radial nodes
-N_E = 20;     % number of EPS radial nodes
-N_x = 25;     % number of axial nodes
+N_B = 10;     % number of brine radial nodes
+N_E = 10;     % number of EPS radial nodes
+N_x = 20;     % number of axial nodes
 
 vf0_current = .25;
 sigma_A = .25;
@@ -18,34 +21,71 @@ am0 = pi*(7.e-5 + 1.6e-4*vf0_current)^2; %[m^2]
 mu_A = log(am0)-.5*sigma_A^2;
 
 n_cols = 10; %number of column
-n_pipes_per_col=5; %number of pipes per column
+n_pipes_per_col=10; %number of pipes per column
 n_pipes = n_cols*n_pipes_per_col; %total number of pipes
 
 A = (exp(mu_A+sigma_A*randn(1,n_pipes)))'; %initial total pipe are
 a = sqrt(A/pi);  %lognormal distribution of radius of pipes
 L   = sqrt((2 * am0) / vf0_current);
-dEPS_pde=500;
 rho_EPS = 1500;
-A_EPS = zeros(size(A));
- % Larger brine pipes receive more EPS
-        W_v = A / sum(A(:));
+A_base = A;
+a_base = sqrt(A_base/pi);
+
+% =========================================================
+% CHOOSE EPS VALUES TO VISUALIZE AS COLUMN PLOTS
+% =========================================================
+
+eps_plot_indices = round(linspace(1,n_sweep,6));  % show 6 EPS cases
+eps_plot_counter = 0;
+
+% Use common radial plotting width based on largest EPS amount
+EPS_amount_max = max(EPS_sweep);
+
+W_v_max = A_base / sum(A_base(:));
+vol_v_max = sum(A_base(:)) * L;
+mass_EPS_max = vol_v_max * EPS_amount_max;
+Veps_max = (mass_EPS_max / rho_EPS) * W_v_max;
+A_EPS_max = Veps_max / L;
+
+R_max_sweep = sqrt((A_base + A_EPS_max)/pi);
+Rmax_global = max(R_max_sweep);
+
+Nr_plot = 120;
+r_plot_global = linspace(-Rmax_global, Rmax_global, Nr_plot);
+
+height_stretch = 1;
+
+figure('Position',[100 100 1200 800]);
+
+for s = 1:n_sweep
+    A_EPS = zeros(size(A));
+    EPS_amount = EPS_sweep(s);
+       fprintf('\nRunning PDE for EPS = %.3f kg/m^3 (%d of %d)\n', ...
+        EPS_amount, s, n_sweep);
+    if EPS_amount > 0
+
+        % Larger brine pipes receive more EPS
+        W_v = A_base / sum(A_base(:));
 
         % Total brine volume across all pipes
-        vol_v = sum(A(:)) * L;
+        vol_v = sum(A_base(:)) * L;
 
-        % Incremental EPS mass
-        dmass_EPS_v = vol_v * dEPS_pde;
+        % EPS mass corresponding to prescribed EPS concentration
+        mass_EPS_v = vol_v * EPS_amount;
 
         % Convert EPS mass to EPS volume and distribute
-        Veps_v = (dmass_EPS_v / rho_EPS) * W_v;
+        Veps_v = (mass_EPS_v / rho_EPS) * W_v;
 
-        % Convert deposited EPS volume to added EPS cross-sectional area
-        dA_EPS = Veps_v / L;
+        % Convert EPS volume to EPS cross-sectional area
+        A_EPS = Veps_v / L;
 
-        % EPS grows outward
-        A_EPS = A_EPS + dA_EPS;
+    end
+    a = a_base;
+    %outer EPS radius
+    R = sqrt((A_base+A_EPS)/pi);
+    R = max(R,a+1e-7);
 
-R = sqrt((A+A_EPS)/pi);
+
 
 
 % =========================================================
@@ -108,7 +148,6 @@ for c = 1:n_cols
     end
 
 end
-
 % ---------------------------------------------------------
 % Build radial grids and velocity profile for each pipe
 % ---------------------------------------------------------
@@ -220,7 +259,140 @@ L_pde = params.L;
 Delta_x_pde = params.Delta_x;
 x_local_pde = linspace(0,L_pde,N_x);
 fprintf('\n--- Exact boundary check from plotting reconstruction ---\n');
+nutrient_EPS_pipe = zeros(n_pipes,1);
+% =========================================================
+% PLOT COLUMNS FOR SELECTED EPS VALUES
+% =========================================================
 
+if ismember(s, eps_plot_indices)
+
+    eps_plot_counter = eps_plot_counter + 1;
+
+    subplot(2,3,eps_plot_counter);
+    hold on
+
+    Rmax = Rmax_global;
+    r_plot = r_plot_global;
+
+    col_spacing = 3.0*Rmax;
+
+    y_n = y(end,:)';
+
+    % Full vertical grid for one column
+    y_full = [];
+
+    for q = 1:n_pipes_per_col
+
+        y_pipe = x_local_pde + (q-1)*L_pde;
+
+        if q == 1
+            y_full = [y_full, y_pipe];
+        else
+            y_full = [y_full, y_pipe(2:end)];
+        end
+
+    end
+
+    % Build and plot each column
+    cmin_t = inf;
+    cmax_t = -inf;
+    F_cols = cell(n_cols,1);
+
+    for c = 1:n_cols
+
+        prev_out = [];
+        F_col = [];
+
+        for q = 1:n_pipes_per_col
+
+            p = (c-1)*n_pipes_per_col + q;
+
+            offset = (p-1)*(n_B+n_E);
+
+            B_stored = reshape(y_n(offset + (1:n_B)), N_B-1, N_x-2);
+            E_stored = reshape(y_n(offset + n_B + (1:n_E)), N_E-1, N_x-2);
+
+            drB = Delta_r_B(p);
+            drE = Delta_r_E(p);
+
+            outF = build_display_field_full_direct(B_stored, E_stored, ...
+                r_B(:,p), r_E(:,p), a(p), R(p), r_plot, ...
+                D_B, D_E, drB, drE, q, n_pipes_per_col, ...
+                prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
+
+            F = outF.field;
+
+            if q == 1
+                F_col = [F_col; F];
+            else
+                F_col = [F_col; F(2:end,:)];
+            end
+
+            prev_out = outF;
+
+        end
+
+        F_cols{c} = F_col;
+
+        cmin_t = min(cmin_t, min(F_col(:), [], 'omitnan'));
+        cmax_t = max(cmax_t, max(F_col(:), [], 'omitnan'));
+
+    end
+
+    % Plot all columns for this EPS value
+    for c = 1:n_cols
+
+        x_shift = (c-1)*col_spacing;
+
+        F_col = F_cols{c};
+        r_plot_shifted = r_plot + x_shift;
+
+        imagesc(r_plot_shifted, height_stretch*y_full, F_col);
+        set(gca,'YDir','normal');
+
+        shading interp
+
+        % Draw pipe walls/interface
+        for q = 1:n_pipes_per_col
+
+            p = (c-1)*n_pipes_per_col + q;
+
+            y0 = height_stretch*((q-1)*L_pde);
+            y1 = height_stretch*(q*L_pde);
+
+            % Brine/EPS interface
+            plot(x_shift + [ a(p)  a(p)], [y0 y1], 'w--', 'LineWidth', 1);
+            plot(x_shift + [-a(p) -a(p)], [y0 y1], 'w--', 'LineWidth', 1);
+
+            % Outer EPS wall
+            plot(x_shift + [ R(p)  R(p)], [y0 y1], 'k-', 'LineWidth', 1);
+            plot(x_shift + [-R(p) -R(p)], [y0 y1], 'k-', 'LineWidth', 1);
+
+        end
+
+    end
+
+    axis tight
+
+    xlim([-Rmax, (n_cols-1)*col_spacing + Rmax]);
+    ylim(height_stretch*[0, n_pipes_per_col*L_pde]);
+
+    if isfinite(cmin_t) && isfinite(cmax_t)
+        if cmax_t > cmin_t
+            caxis([cmin_t cmax_t]);
+        else
+            caxis([cmin_t cmin_t + 1e-12]);
+        end
+    end
+
+    title(sprintf('EPS = %.1f kg/m^3', EPS_amount));
+    xlabel('Column position');
+    ylabel('Vertical distance');
+
+    colorbar
+    hold off
+
+end
 for c = 1:n_cols
 
     prev_out = [];
@@ -242,18 +414,32 @@ for c = 1:n_cols
             D_B, D_E, drB, drE, q, n_pipes_per_col, ...
             prev_out, params.C_in, params.JB_out, params.JE_out, Delta_x_pde);
 
-        if q > 1
-            B_jump = max(abs(outF.B_full(:,1) - prev_out.B_out));
-            E_jump = max(abs(outF.E_full(:,1) - prev_out.E_out));
-
-            fprintf('Column %d, pipe %d -> %d: max B boundary jump = %.3e, max E boundary jump = %.3e\n', ...
-                c, q-1, q, B_jump, E_jump);
-        end
+        % E_full(1,:) is the interface.
+        % E_full(2:end,:) is the EPS layer.
+        nutrient_EPS_pipe(p) = mean(outF.E_full(2:end,:), 'all');
 
         prev_out = outF;
 
     end
 end
+avg_nutrient_EPS_sweep(s) = mean(nutrient_EPS_pipe);
+fprintf('Average EPS-layer nutrient for EPS = %.3f is %.6e\n', ...
+    EPS_amount, avg_nutrient_EPS_sweep(s));
+end
+% =========================================================
+% FINAL PLOT: EPS AMOUNT VS NUTRIENT IN EPS LAYER
+% =========================================================
+
+figure('Position',[100 100 850 650]);
+plot(EPS_sweep, avg_nutrient_EPS_sweep, 'o-', ...
+    'LineWidth', 2, ...
+    'MarkerSize', 7);
+
+grid on; box on
+
+xlabel('Prescribed EPS amount [kg/m^3]');
+ylabel('Average nutrient concentration in EPS layer');
+title('EPS amount vs nutrient concentration in EPS layer');
 % =========================================================
 % PERMEABILITY CHANGE USING EPS-LAYER CONCENTRATION PROXY
 % =========================================================

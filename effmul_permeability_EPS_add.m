@@ -58,7 +58,7 @@ sh_all = cell(m, n, trials);
 
 % Parameter sweeps
 vf0_values = linspace(0.05, 0.25, m); % sweep volume fraction from 0.05 to 0.2 [m^2]
-EPS_con = linspace(0, 100, n); % EPS concentration sweep [kg/m^3]
+EPS_con = linspace(0, 1500, n); % EPS concentration sweep [kg/m^3]
 rho_EPS = 1500; % EPS density [kg/m^3]
 for j = 1:m
     vf0_current = vf0_values(j);
@@ -249,7 +249,7 @@ for i = 1:n
         'DisplayName', sprintf('EPS=%.4f kg/m^3', EPS_con(i)));
 end
 
-set(gca, 'YScale', 'log'); % Set y-axis to log scale
+set(gca, 'YScale', 'normal'); % Set y-axis to log scale
 xlabel('Brine Volume Fraction, \phi');
 ylabel('Effective Permeability, k (m^2)');
 title('Effective Permeability vs Brine Volume Fraction');
@@ -276,7 +276,7 @@ tiledlayout(rows, cols, "Padding","compact","TileSpacing","compact");
 for i = 1:n_eps
     nexttile;
     plot(vf0_values, eff_mean_perm_plot(:, i), '-o', 'LineWidth', 1.6, 'MarkerSize', 5);
-    set(gca, 'YScale', 'log');
+    set(gca, 'YScale', 'normal');
     ylim([kmin, kmax]);
     xlim([min(vf0_values), max(vf0_values)]);
     grid on;
