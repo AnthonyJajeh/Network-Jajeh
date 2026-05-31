@@ -20,7 +20,7 @@ N_B = 10;     % number of brine radial nodes
 N_E = 10;     % number of EPS radial nodes
 N_x = 10;     % number of axial nodes
 
-vf0_values = [0.05 0.10 .15 .20 .25];
+vf0_values = [0.05 0.10 .15 .2 .25];
 n_vf = length(vf0_values);
 
 k_eff_vf_EPS = zeros(n_vf, n_sweep);
@@ -201,39 +201,39 @@ for c = 1:n_cols
     end
 
 end
-% =========================================================
-% EFFECTIVE PERMEABILITY FROM PDE FLOW FIELD
-% =========================================================
-% Darcy law:
-%   Ubar = -(k/mu) * (DeltaP / D_total)
-%
-% Rearranged:
-%   k = mu * Ubar * D_total / DeltaP
-%
-% Here:
-%   Q_total = sum flow through all columns [m^3/s]
-%   A_sample = total cross-sectional area of sample [m^2]
-%   Ubar = Q_total / A_sample [m/s]
-% =========================================================
-
-D_total = n_pipes_per_col * L;   % total vertical height [m]
-A_sample = n_cols * L^2;         % sample cross-sectional area [m^2]
-
-Q_total = sum(Q_col);            % total flow through PDE column system [m^3/s]
-Ubar = Q_total / A_sample;       % Darcy-scale average velocity [m/s]
-
-k_eff_sweep(s) = mu_fluid * Ubar * D_total / p_drop;  % [m^2]
-
-k_eff_vf_EPS(j,s) = k_eff_sweep(s);
-
-if s == 1
-    k_eff_norm_sweep(s) = 1;
-else
-    k_eff_norm_sweep(s) = k_eff_sweep(s) / k_eff_sweep(1);
-end
-
-fprintf('PDE effective permeability for EPS = %.3f kg/m^3 is %.6e m^2\n', ...
-    EPS_amount, k_eff_sweep(s));
+% % =========================================================
+% % EFFECTIVE PERMEABILITY FROM PDE FLOW FIELD
+% % =========================================================
+% % Darcy law:
+% %   Ubar = -(k/mu) * (DeltaP / D_total)
+% %
+% % Rearranged:
+% %   k = mu * Ubar * D_total / DeltaP
+% %
+% % Here:
+% %   Q_total = sum flow through all columns [m^3/s]
+% %   A_sample = total cross-sectional area of sample [m^2]
+% %   Ubar = Q_total / A_sample [m/s]
+% % =========================================================
+% 
+% D_total = n_pipes_per_col * L;   % total vertical height [m]
+% A_sample = n_cols * L^2;         % sample cross-sectional area [m^2]
+% 
+% Q_total = sum(Q_col);            % total flow through PDE column system [m^3/s]
+% Ubar = Q_total / A_sample;       % Darcy-scale average velocity [m/s]
+% 
+% k_eff_sweep(s) = mu_fluid * Ubar * D_total / p_drop;  % [m^2]
+% 
+% k_eff_vf_EPS(j,s) = k_eff_sweep(s);
+% 
+% if s == 1
+%     k_eff_norm_sweep(s) = 1;
+% else
+%     k_eff_norm_sweep(s) = k_eff_sweep(s) / k_eff_sweep(1);
+% end
+% 
+% fprintf('PDE effective permeability for EPS = %.3f kg/m^3 is %.6e m^2\n', ...
+%     EPS_amount, k_eff_sweep(s));
 % ---------------------------------------------------------
 % Build radial grids and velocity profile for each pipe
 % ---------------------------------------------------------
@@ -580,101 +580,101 @@ E_mean_all_EPS(s,:) = mean(E_by_col_dense, 1);
 
 end
 end
-% =========================================================
-% PDE MODEL: EPS VS EFFECTIVE PERMEABILITY WITH EXPONENTIAL FIT
-% ONE PANEL PER VOLUME FRACTION
-% =========================================================
-
-rho_EPS = 1500;   % kg/m^3
-
-figure('Position',[100 100 1200 700]);
-
-rows = ceil(n_vf/3);
-cols = 3;
-
-for j = 1:n_vf
-
-    subplot(rows, cols, j);
-    hold on; grid on; box on
-
-    E_data = EPS_sweep(:);
-    k_data = k_eff_vf_EPS(j,:).';
-
-
-   E_fine = linspace(min(EPS_sweep), max(EPS_sweep), 300);
-
-    % Linear filling model:
-    % A(E) = A0(1 - E/rho_EPS)
-    % Since k scales like area^2, k(E) = k(0)(1 - E/rho_EPS)^2
-   Kfit = k_data(1) * max(1 - E_fine/rho_EPS, 0).^2;
-
-    % Theory: k(E) = k(0) exp(-2E/rho_EPS)
-    Ktheory = k_data(1) * max(1 - E_fine/rho_EPS, 0).^2;
-
-     plot(E_data, k_data, 'o-', ...
-            'LineWidth', 1.5, ...
-            'MarkerSize', 6, ...
-            'DisplayName', 'PDE data');
-    
-        plot(E_fine, Kfit, 'r--', ...
-            'LineWidth', 2, ...
-            'DisplayName', 'model: k(0)(1-E/\rho)^2');
-    
-        xlabel('EPS Concentration, E [kg/m^3]');
-        ylabel('k(E) [m^2]');
-        title(sprintf('\\phi = %.2f', vf0_values(j)));
-    
-        legend('Location','best','FontSize',8);
-
-    hold off
-
-end
-
-sgtitle('EPS vs Effective Permeability: PDE Model');
-% =========================================================
-% PDE MODEL: EFFECTIVE PERMEABILITY VS BRINE VOLUME FRACTION
-% ONE CURVE PER EPS CONCENTRATION
-% =========================================================
-
-figure('Position',[100 100 900 650]);
-hold on; grid on; box on
-
-% Choose EPS values to show from the PDE sweep
-eps_indices = [1, round(n_sweep/4), round(n_sweep/2),n_sweep];
-
-markerStyles = {'x', '+', 'o', 's', 'd', '^', 'v'};
-lineStyles   = {'none', 'none', 'none','none','none', 'none', 'none'};
-
-for r = 1:length(eps_indices)
-
-    s = eps_indices(r);
-
-    plot(vf0_values, k_eff_vf_EPS(:,s), ...
-        'LineStyle', lineStyles{r}, ...
-        'Marker', markerStyles{r}, ...
-        'LineWidth', 2, ...
-        'MarkerSize', 8, ...
-        'DisplayName', sprintf('EPS = %.1f kg/m^3', EPS_sweep(s)));
-
-end
-
-xlabel('Brine volume fraction, \phi');
-ylabel('Effective permeability, k_{eff} [m^2]');
-title('Effective permeability vs brine volume fraction (PDE MODEL)');
-
-legend('Location','northwest');
-
-% Use log scale because permeability values are very small
-set(gca,'YScale','log');
-
-% Automatically zoom to the actual PDE permeability range
-all_k = k_eff_vf_EPS(:);
-all_k = all_k(isfinite(all_k) & all_k > 0);
-
-legend('Location','northwest');
-ylim([1e-13 1e-8]);   % adjust if needed
-xlim([min(vf0_values)*0.8, max(vf0_values)*1.1]);
-hold off
+% % =========================================================
+% % PDE MODEL: EPS VS EFFECTIVE PERMEABILITY WITH EXPONENTIAL FIT
+% % ONE PANEL PER VOLUME FRACTION
+% % =========================================================
+% 
+% rho_EPS = 1500;   % kg/m^3
+% 
+% figure('Position',[100 100 1200 700]);
+% 
+% rows = ceil(n_vf/3);
+% cols = 3;
+% 
+% for j = 1:n_vf
+% 
+%     subplot(rows, cols, j);
+%     hold on; grid on; box on
+% 
+%     E_data = EPS_sweep(:);
+%     k_data = k_eff_vf_EPS(j,:).';
+% 
+% 
+%    E_fine = linspace(min(EPS_sweep), max(EPS_sweep), 300);
+% 
+%     % Linear filling model:
+%     % A(E) = A0(1 - E/rho_EPS)
+%     % Since k scales like area^2, k(E) = k(0)(1 - E/rho_EPS)^2
+%    Kfit = k_data(1) * max(1 - E_fine/rho_EPS, 0).^2;
+% 
+%     % Theory: k(E) = k(0) exp(-2E/rho_EPS)
+%     Ktheory = k_data(1) * max(1 - E_fine/rho_EPS, 0).^2;
+% 
+%      plot(E_data, k_data, 'o-', ...
+%             'LineWidth', 1.5, ...
+%             'MarkerSize', 6, ...
+%             'DisplayName', 'PDE data');
+% 
+%         plot(E_fine, Kfit, 'r--', ...
+%             'LineWidth', 2, ...
+%             'DisplayName', 'model: k(0)(1-E/\rho)^2');
+% 
+%         xlabel('EPS Concentration, E [kg/m^3]');
+%         ylabel('k(E) [m^2]');
+%         title(sprintf('\\phi = %.2f', vf0_values(j)));
+% 
+%         legend('Location','best','FontSize',8);
+% 
+%     hold off
+% 
+% end
+% 
+% sgtitle('EPS vs Effective Permeability: PDE Model');
+% % =========================================================
+% % PDE MODEL: EFFECTIVE PERMEABILITY VS BRINE VOLUME FRACTION
+% % ONE CURVE PER EPS CONCENTRATION
+% % =========================================================
+% 
+% figure('Position',[100 100 900 650]);
+% hold on; grid on; box on
+% 
+% % Choose EPS values to show from the PDE sweep
+% eps_indices = [1, round(n_sweep/4), round(n_sweep/2),n_sweep];
+% 
+% markerStyles = {'x', '+', 'o', 's', 'd', '^', 'v'};
+% lineStyles   = {'none', 'none', 'none','none','none', 'none', 'none'};
+% 
+% for r = 1:length(eps_indices)
+% 
+%     s = eps_indices(r);
+% 
+%     plot(vf0_values, k_eff_vf_EPS(:,s), ...
+%         'LineStyle', lineStyles{r}, ...
+%         'Marker', markerStyles{r}, ...
+%         'LineWidth', 2, ...
+%         'MarkerSize', 8, ...
+%         'DisplayName', sprintf('EPS = %.1f kg/m^3', EPS_sweep(s)));
+% 
+% end
+% 
+% xlabel('Brine volume fraction, \phi');
+% ylabel('Effective permeability, k_{eff} [m^2]');
+% title('Effective permeability vs brine volume fraction (PDE MODEL)');
+% 
+% legend('Location','northwest');
+% 
+% % Use log scale because permeability values are very small
+% set(gca,'YScale','log');
+% 
+% % Automatically zoom to the actual PDE permeability range
+% all_k = k_eff_vf_EPS(:);
+% all_k = all_k(isfinite(all_k) & all_k > 0);
+% 
+% legend('Location','northwest');
+% ylim([1e-13 1e-8]);   % adjust if needed
+% xlim([min(vf0_values)*0.8, max(vf0_values)*1.1]);
+% hold off
 
 % =========================================================
 % PERMEABILITY CHANGE USING EPS-LAYER CONCENTRATION PROXY

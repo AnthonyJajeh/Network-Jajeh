@@ -57,7 +57,7 @@ for c = 1:n_cols
       % Axial BCs for brine
         if q == 1
             B(:,1) = param.C_in;
-            E(:,1) = 0;
+            E(:,1) = param.C_in;
         else
             % Exact pipe-to-pipe boundary matching.
             % Pipe q inlet equals pipe q-1 outlet.
