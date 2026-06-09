@@ -844,7 +844,7 @@ hold off
 % ONE PANEL PER vf0
 % =========================================================
 
-figure('Position',[100 100 1200 700]);
+figure;
 
 rows = ceil(m/3);
 cols = 3;
@@ -916,7 +916,7 @@ height_stretch = 1;
 % ONE CURVE PER VOLUME FRACTION
 % =========================================================
 
-figure('Position',[100 100 900 650]);
+figure;
 hold on; grid on; box on
 
 for j = 1:n_vf

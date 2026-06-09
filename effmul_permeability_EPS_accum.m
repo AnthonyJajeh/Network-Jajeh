@@ -196,7 +196,7 @@ sh_final = sh_all{random_j, random_i, random_t};
 % Compare network/multigrid, series-parallel resistance, and theory
 % =========================================================
 
-figure('Position',[100 100 1200 700]);
+fig_perm_decay=figure;
 
 rows = ceil(length(vf0_values)/3);
 cols = min(3, length(vf0_values));
@@ -253,7 +253,7 @@ end
 
 sgtitle('Normalized permeability decay for different brine volume fractions');
 ratio = eff_resistance_perm_plot(j,:) ./ eff_mean_perm_plot(j,:);
-figure;
+fig_ratio = figure;
 plot(EPS_con, ratio, 'o-', 'LineWidth', 1.5)
 grid on
 xlabel('EPS concentration, E [kg/m^3]');
@@ -264,7 +264,7 @@ title(sprintf('Ratio for \\phi = %.2f', vf0_values(j)));
 % Compare multigrid permeability and resistance permeability
 % =========================================================
 
-figure('Position',[100 100 1200 700]);
+fig_eff_perm_compare = figure;
 
 rows = ceil(m/3);
 cols = min(3,m);
@@ -332,7 +332,7 @@ RMSE_fit  = zeros(mRows,1);
 NRMSE_fit = zeros(mRows,1);
 R2_fit    = zeros(mRows,1);
 
-figure;
+fig_EPS_eff = figure;
 rows = ceil(mRows/3);
 cols = min(3,mRows);
 
@@ -481,7 +481,7 @@ GOF_Table = table( ...
 
 disp(GOF_Table);
 % --- Subplots: EPS concentration vs Expected Area for each vf0 ---
-figure;
+fig_EPS_expected = figure;
 rows = ceil(m/3);  % 2 rows if m=5
 cols = 3;          % 3 columns
 
@@ -497,7 +497,7 @@ end
 
 sgtitle('EPS Concentration vs Expected Area for Different vf0');
 % 3. Histograms: log areas after EPS accumulation
-figure;
+fig_hist = figure;
 
 % Remove zero or negative values before taking the log
 sv_positive = sv_final(sv_final > 0);
@@ -522,12 +522,12 @@ sgtitle('Distribution of ln(A) for Pipe Cross-Sections After EPS Accumulation');
 % Show only 4 EPS concentrations
 % =========================================================
 
-figure;
+fig_vf0_eff_mean = figure;
 hold on; grid on; box on
 
 % Pick 4 representative EPS values:
 % first, one-third, two-thirds, last
-eps_indices = [1, round(n/4), round(n/2), n];
+eps_indices = [1, round(n/4), round(n/2), n-1];
 
 markerStyles = {'x', '+', 'o', 's', 'd', '^', 'v'};
 
@@ -555,7 +555,7 @@ ylim([1e-13 1e-8]);   % adjust if needed
 xlim([min(vf0_values)*0.8, max(vf0_values)*1.1]);
 hold off
 
-figure;
+fig_vf0_resistance = figure;
 hold on; grid on; box on
 
 % Pick 4 representative EPS values:
@@ -603,7 +603,7 @@ kmax = max(eff_mean_perm_plot(:));
 % If you want fixed paper-like limits, uncomment:
 % kmin = 1e-13; kmax = 1e-8;
 
-figure;
+fig_vf0_eff = figure;
 tiledlayout(rows, cols, "Padding","compact","TileSpacing","compact");
 
 for i = 1:n_eps
@@ -630,7 +630,7 @@ for i = 1:n_eps
 end
 
 % --- Subplots: Expected Area vs Effective Permeability (one panel per vf0) ---
-figure;
+fig_exp_area=figure;
 rows = ceil(m/3);
 cols = 3;
 
@@ -646,6 +646,49 @@ for j = 1:m
     ylabel('k (m^2)');
     title(sprintf('\\phi = %.2f', vf0_values(j)));
 end
+% fname1 = 'fig_perm_decay';
+% fname2 = 'fig_ratio';
+% fname3 = 'fig_eff_perm_compare';
+% fname4 = 'fig_EPS_eff';
+% fname5 = 'fig_EPS_expected';
+% fname6 = 'fig_hist';
+% fname7 = 'fig_vf0_eff_mean';
+% fname8 = 'fig_vf0_resistance';
+% fname9 = 'fig_vf0_eff';
+% fname10 = 'fig_exp_area';
+
+% 
+% nice_graphing(fname1,fig_perm_decay)
+% nice_graphing(fname2,fig_ratio)
+% nice_graphing(fname3,fig_eff_perm_compare)
+% nice_graphing(fname4, fig_EPS_eff)
+% nice_graphing(fname5,fig_EPS_expected)
+% nice_graphing(fname6,fig_hist)
+% nice_graphing(fname7,fig_vf0_eff_mean)
+% nice_graphing(fname8,fig_vf0_resistance)
+% nice_graphing(fname9,fig_vf0_eff)
+% nice_graphing(fname10,fig_exp_area)
+% 
+% 
+% function nice_graphing(fname, fig)
+% picturewidth = 32; % set this parameter and keep it forever
+% hw_ratio = .75; % feel free to play with this ratio
+% set(findall(fig,'-property','FontSize'),'FontSize',24) % adjust fontsize to your document
+% set(findall(fig,'-property','Box'),'Box','on') % optional
+% set(findall(fig,'-property','Interpreter'),'Interpreter','latex')
+% set(findall(fig,'-property','TickLabelInterpreter'),'TickLabelInterpreter','latex')
+% set(fig,'Units','centimeters','Position',[3 3 picturewidth hw_ratio*picturewidth])
+% pos = get(fig,'Position');
+% set(fig,'PaperPositionMode','Auto','PaperUnits','centimeters','PaperSize',[pos(3), pos(4)])
+%  lgd = findall(fig, 'Type', 'Legend');
+%     set(lgd, 'Box', 'off');     % ensure no border if a legend exists
+% %print(hfig,fname,'-dpdf','-painters','-fillpage')
+% %print(hfig,fname,'-dpng','-painters')
+% %set(hfig, 'Position', get(0, 'Screensize'));
+% exportgraphics(fig, strcat(fname,'.png'), 'Resolution', 300);
+% exportgraphics(fig, strcat(fname,'.pdf'), 'ContentType', 'vector');
+% saveas(fig, strcat(fname,'.fig'));
+% end
 
 sgtitle('Expected Area vs Effective Permeability for Each Volume Fraction');
 function [A_sv, A_sh, vfrac, amean] = gen_pipes(rmu, rsig, nx, ny, h)
